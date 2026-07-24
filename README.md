@@ -1,4 +1,5 @@
 # Isometric World Engine
+![World preview](screenshots/IsoFED.png)
 
 A procedurally generated isometric (with legacy top-down) world engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, placeable lamps, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
 
