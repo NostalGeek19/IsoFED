@@ -19,13 +19,14 @@ No external art or audio assets are required to run the project: terrain is colo
 - One click (`R`) regenerates the entire world with a fresh seed.
 
 ### Weather
+![World preview](screenshots/rain.png)
 - Three precipitation types — **rain**, **snow**, and **sandstorm** — each tied to the biome currently dominating the screen (rain over grass/forest/water, snow over cold/high biomes, sandstorm over desert/savanna).
 - Only one type is ever "in charge" at a time; when the dominant biome changes, the old weather **crossfades out** while the new one **crossfades in** — no jarring pops, and no more than one weather type competing for attention.
 - Particles are simulated in NumPy arrays (not Python objects), each with its own fall speed, drift, and landing behavior — rain streaks and splashes, snow drifts sideways as it falls, sandstorm particles blow almost horizontally.
 - Precipitation lands on the *actual* elevation-adjusted position of each tile, so weather visually "sticks" to hills and mountains instead of floating over flat ground.
 - Global timer alternates between clear and stormy periods with randomized durations, and intensity fades in/out smoothly rather than switching instantly (`F2` to force a change).
 
-![World preview](screenshots/rain.png)
+
 ![World preview](screenshots/snow.png)
 ![World preview](screenshots/dust.png)
 
