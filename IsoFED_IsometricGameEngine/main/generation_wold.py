@@ -130,7 +130,7 @@ class ChunkLoader:
 
 
 class IsometricWorld:
-    def __init__(self, width=5120, height=5120, chunk_size=32, tile_size=26):
+    def __init__(self, width=128, height=128, chunk_size=16, tile_size=16):
         self.width = width
         self.height = height
         self.chunk_size = chunk_size
