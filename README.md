@@ -37,6 +37,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Time can be paused (`T`) or nudged forward/backward an hour at a time (`,` / `.`) for testing or cinematic screenshots.
 
 ### Manual lighting (lamps)
+![World preview](screenshots/light.png)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
 
 ### Sound
