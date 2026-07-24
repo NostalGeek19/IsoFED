@@ -24,6 +24,8 @@ No external art or audio assets are required to run the project: terrain is colo
 - Global timer alternates between clear and stormy periods with randomized durations, and intensity fades in/out smoothly rather than switching instantly (`F2` to force a change).
 
 ![World preview](screenshots/rain.png)
+![World preview](screenshots/snow.png)
+![World preview](screenshots/dust.png)
 
 ### Day/night cycle
 - A full day/night clock drives everything lighting-related: ambient color temperature (cool blue at night, warm at sunrise/sunset, neutral at noon), overall scene brightness, and the direction of the sun.
