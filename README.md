@@ -13,7 +13,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Terrain height, moisture, temperature and fertility maps are combined into distinct biomes: ocean, beach, grassland, forest, dense forest, hills, mountains, high peaks, desert, savanna, taiga, tundra, swamp and snow.
 - Perlin-style noise is fully vectorized with NumPy (no per-tile Python loops), so chunk generation stays fast even at large world sizes.
 - Height is normalized against a **global** min/max sampled once across the whole world, so neighboring chunks blend into one continuous, natural-looking landscape instead of each chunk stretching its own local contrast.
-- Asynchronous chunk loading via a background thread pool, with a "fog of war" — only the chunk under the camera (plus its neighbor during a transition) is ever rendered, keeping memory and CPU cost flat regardless of world size.
+- Asynchronous chunk loading via a background thread pool.
 - One click (`R`) regenerates the entire world with a fresh seed.
 
 ### Weather
@@ -21,7 +21,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Only one type is ever "in charge" at a time; when the dominant biome changes, the old weather **crossfades out** while the new one **crossfades in** — no jarring pops, and no more than one weather type competing for attention.
 - Particles are simulated in NumPy arrays (not Python objects), each with its own fall speed, drift, and landing behavior — rain streaks and splashes, snow drifts sideways as it falls, sandstorm particles blow almost horizontally.
 - Precipitation lands on the *actual* elevation-adjusted position of each tile, so weather visually "sticks" to hills and mountains instead of floating over flat ground.
-- Global timer alternates between clear and stormy periods with randomized durations, and intensity fades in/out smoothly rather than switching instantly (`F2` to force a change, adjustable density with `[` / `]`).
+- Global timer alternates between clear and stormy periods with randomized durations, and intensity fades in/out smoothly rather than switching instantly (`F2` to force a change).
 
 ### Day/night cycle
 - A full day/night clock drives everything lighting-related: ambient color temperature (cool blue at night, warm at sunrise/sunset, neutral at noon), overall scene brightness, and the direction of the sun.
@@ -67,7 +67,7 @@ No audio or image assets are required to run the project out of the box.
 python generation_wold.py
 ```
 
-The world opens in fullscreen. Press `F1` at any time for the full control list.
+The world opens in fullscreen.
 
 ---
 
@@ -113,13 +113,11 @@ The engine is deliberately split into small, self-contained modules. Each one on
 | `I` | Toggle info panel |
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
-| `[` / `]` | Decrease / increase precipitation density |
 | `T` | Pause / resume the day-night clock |
-| `,` / `.` | Step time back / forward one hour |
+| `,` `/` `.` | Step time back / forward one hour |
 | `-` / `=` | Master volume down / up |
 | `Ctrl+C` | Recenter camera on the world |
 | `F11` | Toggle fullscreen |
-| `F1` | Help overlay |
 | `Esc` | Quit |
 
 ---
@@ -139,29 +137,3 @@ sound/bioms/
 ```
 
 Anything you don't provide simply keeps using the built-in procedural fallback — you can add files one biome at a time. If you'd rather keep sounds somewhere else entirely, pass your own search path(s) to `SoundSystem(biome_sound_dirs=[...])`.
-
----
-
-## Extending the engine
-
-Because each system is decoupled and only communicates through a handful of setter methods and a shared `screen` surface, adding a new one follows the same recipe used for weather/sun/lighting/sound:
-
-1. Write a self-contained class with an `update(dt)` method and a `render(screen, ...)` method.
-2. Have it expose whatever "current state" setters `generation_wold.py` needs to drive it (e.g. `set_x(value)`), rather than reaching into the world/camera itself.
-3. Instantiate it once in `DualViewRenderer.__init__`, call `update()` next to the other systems in the main loop, and call `render()` at the appropriate point in the frame (before or after the tile loop, depending on whether it belongs behind or in front of the terrain).
-
-This is also how weather sits *under* the UI but *over* the terrain, and how lamp light gets baked into tile color before the sun's day/night tint is applied on top.
-
----
-
-## Known limitations
-
-- Rendering is CPU-side (`pygame.draw` per tile); very large view distances or very high resolutions will be rendering-bound before they're generation-bound. An experimental OpenGL-accelerated tile path was prototyped but reverted after it measured *slower* than the software renderer on typical hardware — see the module history if you want to pick that back up (the win only shows up once the UI/particle overlay is also moved off the CPU⇄GPU round trip).
-- Procedural biome ambience is a simple filtered-noise texture, not a musical/produced soundscape — it's meant as a functional placeholder until you supply real recordings.
-- World data is regenerated from its seed each run; there's no save/load of a specific world or of placed lamps yet.
-
----
-
-## License
-
-Add your preferred license here before publishing (e.g. MIT).
