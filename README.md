@@ -50,8 +50,6 @@ No external art or audio assets are required to run the project: terrain is colo
 ### UI & tools
 - Live info panel (FPS, camera/chunk position, zoom, weather/sun/light/sound status, tile under cursor).
 - Minimap with click-to-travel.
-- In-game help overlay (`F1`) listing every control.
-
 ---
 
 ## Requirements
