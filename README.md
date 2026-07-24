@@ -119,7 +119,7 @@ The engine is deliberately split into small, self-contained modules. Each one on
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
 | `T` | Pause / resume the day-night clock |
-| `,` `/` `.` | Step time back / forward one hour |
+| `,` `.` | Step time back / forward one hour |
 | `-` / `=` | Master volume down / up |
 | `Ctrl+C` | Recenter camera on the world |
 | `F11` | Toggle fullscreen |
