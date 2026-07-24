@@ -31,6 +31,7 @@ No external art or audio assets are required to run the project: terrain is colo
 ![World preview](screenshots/dust.png)
 
 ### Day/night cycle
+![World preview](screenshots/day_night.gif)
 - A full day/night clock drives everything lighting-related: ambient color temperature (cool blue at night, warm at sunrise/sunset, neutral at noon), overall scene brightness, and the direction of the sun.
 - Terrain shading is **directional and dynamic** — slopes facing the sun are brighter, slopes facing away are darker, and the effect rotates over the course of the day instead of using a single fixed light angle.
 - Time can be paused (`T`) or nudged forward/backward an hour at a time (`,` / `.`) for testing or cinematic screenshots.
