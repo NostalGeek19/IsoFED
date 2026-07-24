@@ -10,7 +10,7 @@ No external art or audio assets are required to run the project: terrain is colo
 ## Features
 
 ### World generation
-![World preview](screenshots/word.png)
+![World preview](screenshots/world.png)
 - Infinite-feeling world split into chunks, generated on demand and cached.
 - Terrain height, moisture, temperature and fertility maps are combined into distinct biomes: ocean, beach, grassland, forest, dense forest, hills, mountains, high peaks, desert, savanna, taiga, tundra, swamp and snow.
 - Perlin-style noise is fully vectorized with NumPy (no per-tile Python loops), so chunk generation stays fast even at large world sizes.
