@@ -38,8 +38,6 @@ No external art or audio assets are required to run the project: terrain is colo
 
 ### Manual lighting (lamps)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
-- Light is **baked into the ground color** with quadratic falloff — grass around a lamp genuinely brightens and warms up, rather than a flat translucent circle sitting on top of the scene.
-- Lamps persist in world coordinates and only render their physical post/bulb while their chunk is the one currently on screen, so a lamp from a chunk you've since left never appears to "float" in the void.
 
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
