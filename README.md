@@ -106,13 +106,28 @@ The engine is deliberately split into small, self-contained modules. Each one on
 
 ```
 .
-├── generation_wold.py     # World generation, chunk streaming, camera/rendering, input, UI
-├── weather_system.py      # Rain / snow / sandstorm particles, biome crossfade
-├── sun_system.py          # Day/night clock, ambient tint, directional shading, sun disc/rays
-├── lighting_system.py     # Placeable lamps, tile light-boost, post/bulb rendering
-├── sound_system.py        # Biome ambience (file-based) + procedural weather audio
-└── sound/
-    └── bioms/             # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+├── generation_world.py     # World generation, chunk streaming, camera/rendering, input, UI
+├── weather_system.py       # Rain / snow / sandstorm particles, biome crossfade
+├── sun_system.py           # Day/night clock, ambient tint, directional shading, sun disc/rays
+├── lighting_system.py      # Placeable lamps, tile light-boost, post/bulb rendering
+├── sound_system.py         # Biome ambience (file-based) + procedural weather audio
+├── texture_manager.py      # Texture loading, caching, and overlay management
+├── sound/
+│   └── bioms/              # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+└── textures/
+    ├── bioms/              # Base biome textures (.png format)
+    │   ├── grassland.png
+    │   ├── dense_forest.png
+    │   ├── forest.png
+    │   └── ...
+    ├── grass/              # Grass overlays (with transparency)
+    │   └── grassland.png
+    ├── trees/              # Tree overlays (with transparency)
+    │   └── dense_forest.png
+    └── flowers/            # Flower sprites (with transparency)
+        ├── flower_red.png
+        ├── flower_blue.png
+        └── ...
 ```
 
 ### Module responsibilities at a glance
@@ -123,6 +138,7 @@ The engine is deliberately split into small, self-contained modules. Each one on
 | `sun_system.py` | Time of day, ambient tint, light direction, sun visuals | `apply_tint()`, `get_light_direction()`, `get_elevation()` |
 | `lighting_system.py` | Lamp placement & rendering | `toggle_light_at()`, `get_tile_light_boost()`, `render(..., chunk_bounds=...)` |
 | `sound_system.py` | Ambient/weather audio playback | `set_dominant_biome()`, `set_weather()` |
+| `texture_manager.py` | Texture loading, caching, and overlay management | `get_diamond_texture()`, `get_grass_overlay()`, `get_tree_overlay()`, `get_flower_texture()` |
 
 `generation_wold.py` is the only module that knows about all the others; it computes the "dominant biome/weather kind" for the current camera view once per frame (with hysteresis, so the result doesn't flicker right on a biome border) and feeds it to whichever systems need it.
 
