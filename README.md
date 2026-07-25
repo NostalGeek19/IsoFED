@@ -42,11 +42,10 @@ No external art or audio assets are required to run the project: terrain is colo
 
 ### Textures
 ![World preview](screenshots/textures_2.png)
--The texture system is built on a modular principle and allows layering multiple visual effects on top of base landscape tiles. The core idea is that each biome can have:
+The texture system is built on a modular principle and allows layering multiple visual effects on top of base landscape tiles. The core idea is that each biome can have:
 
-    Base landscape texture (in bioms/ folder)
-
-    Additional overlays (grass, trees, flowers)
+- Base landscape texture (in bioms/ folder)
+- Additional overlays (grass, trees, flowers)
 
 ```
 textures/
