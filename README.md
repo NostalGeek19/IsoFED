@@ -40,6 +40,31 @@ No external art or audio assets are required to run the project: terrain is colo
 ![World preview](screenshots/light2.png)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
 
+### Textures
+![World preview](screenshots/textures_2.png)
+-The texture system is built on a modular principle and allows layering multiple visual effects on top of base landscape tiles. The core idea is that each biome can have:
+
+    Base landscape texture (in bioms/ folder)
+
+    Additional overlays (grass, trees, flowers)
+
+```
+textures/
+├── bioms/          # Base biome textures (.png format)
+│   ├── grassland.png
+│   ├── dense_forest.png
+│   ├── forest.png
+│   └── ...
+├── grass/          # Grass overlays (with transparency)
+│   └── grassland.png
+├── trees/          # Tree overlays (with transparency)
+│   └── dense_forest.png
+└── flowers/        # Flower sprites (with transparency)
+    ├── flower_red.png
+    ├── flower_blue.png
+    └── ...
+```
+
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
 - Biome ambience loads from your own audio files (`sound/bioms/forest.*`, `plains.*`, `desert.*`, `water.*`, `mountains.*`, `swamp.*` — `.wav`/`.mp3`/`.ogg`, first match wins). Any biome missing a file falls back to a procedurally generated wind/water/critter texture so the game is never silent, with a clear console warning telling you exactly which file to add.
