@@ -150,7 +150,6 @@ The engine is deliberately split into small, self-contained modules. Each one on
 |---|---|
 | `WASD` / Arrow keys | Move camera |
 | `Shift` + move | Move faster |
-| Mouse wheel | Zoom |
 | Right-click drag | Pan camera |
 | Left-click (minimap) | Jump camera to that point |
 | `G` | Toggle grid — hover to highlight a tile, click to place/remove a lamp |
