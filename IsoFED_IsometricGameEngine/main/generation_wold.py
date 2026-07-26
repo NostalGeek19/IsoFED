@@ -1483,7 +1483,7 @@ class DualViewRenderer:
         for line in info_lines:
             if line:
                 if "mode:" in line:
-                    color = mode_color # (not used)
+                    color = None
                 elif "layer:" in line:
                     color = layer_color
                 elif "FPS:" in line:
