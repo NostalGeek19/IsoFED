@@ -161,9 +161,6 @@ class IsometricWorld:
         self.loader = ChunkLoader(self)
         
         # Tile types (surface) – Layer 0
-        # desert / taiga / tundra / swamp fully removed (not just unused —
-        # deleted here, from cave mapping, and from colors below), so ids
-        # are renumbered to stay contiguous with self.colors.
         self.tile_types = {
             'deep_ocean': 0,
             'ocean': 1,
@@ -601,7 +598,6 @@ class DualViewRenderer:
         self.small_font = pygame.font.Font(None, 22)
         self.big_font = pygame.font.Font(None, 48)
         
-        self.isometric_mode = True
         self.current_layer = 0
         
         # A Camera at the Center of the World
@@ -619,9 +615,9 @@ class DualViewRenderer:
         self.chunk_transition = 1.0
         self.old_chunk_data = None
         
-        self.isometric_zoom = 2.5
-        self.topdown_zoom = 2
-        self.target_isometric_zoom = 2.5
+
+        self.isometric_zoom = 1.5
+        self.target_isometric_zoom = 1.5
         self.current_zoom = self.isometric_zoom
         
         self.show_grid = False
@@ -648,11 +644,33 @@ class DualViewRenderer:
         
         # Custom per-tile textures — separate module, texture_manager.py.
         self.texture_manager = TextureManager()
+
+        self._tint_cache = {}
         self._biome_id_to_name = {v: k for k, v in world.tile_types.items()}
+        
+        self._GRASS_OVERLAY_TEXTURE_NAMES = {
+            'dense_forest': 'grass_dense_forest',
+        }
+        
+        self._TREE_OVERLAY_TEXTURE_NAMES = {
+            'savanna': 'savanna_sand',
+            'beach': 'beach_sand',
+            'hills': 'hills_t',
+            'mountains': 'mountains_t',
+            'snow': 'snow_t',
+            'high_peaks': 'snow_peaks',
+        }
 
         self.flower_density = 0.12
         self._flower_variants = self.texture_manager.discover_flowers()
         
+        self.stone_density = 0.12
+        self._STONE_BIOMES = ('savanna', 'hills')
+        self._stone_variants_by_biome = {
+            biome: self.texture_manager.discover_stones(biome) for biome in self._STONE_BIOMES
+        }
+        
+        self.tree_density = 0.5
         self.visible_tiles_count = 0
         self.total_tiles = world.width * world.height
         self.fps_history = []
@@ -736,10 +754,7 @@ class DualViewRenderer:
         keys = pygame.key.get_pressed()
         dt = self.dt
         
-        if self.isometric_mode:
-            speed = 15 * dt / self.current_zoom
-        else:
-            speed = 15 * dt / self.topdown_zoom
+        speed = 15 * dt / self.current_zoom
         
         if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
             speed *= 3
@@ -777,11 +792,8 @@ class DualViewRenderer:
                 self.is_transitioning = False
                 self.old_chunk_data = None
         
-        if self.isometric_mode:
-            self.isometric_zoom += (self.target_isometric_zoom - self.isometric_zoom) * 0.15
-            self.current_zoom = self.isometric_zoom
-        else:
-            self.current_zoom = self.topdown_zoom
+        self.isometric_zoom += (self.target_isometric_zoom - self.isometric_zoom) * 0.15
+        self.current_zoom = self.isometric_zoom
     
     def handle_minimap_click(self, mouse_x, mouse_y):
         if (self.minimap_x <= mouse_x <= self.minimap_x + self.minimap_size and
@@ -852,37 +864,6 @@ class DualViewRenderer:
         visible_tiles.sort(key=lambda t: t[0])
         return visible_tiles
     
-    def get_visible_tiles_topdown(self):
-        visible_tiles = []
-        
-        tile_size_px = self.world.tile_size * self.topdown_zoom
-        
-        chunk = self.world.get_chunk(self.current_chunk_x, self.current_chunk_y)
-        if chunk is None:
-            return visible_tiles
-        
-        size = self.world.chunk_size
-        xx, yy = np.meshgrid(np.arange(size), np.arange(size), indexing='ij')
-        world_x_arr = self.current_chunk_x * size + xx
-        world_y_arr = self.current_chunk_y * size + yy
-        
-        in_bounds = (world_x_arr < self.world.width) & (world_y_arr < self.world.height)
-        
-        screen_x_arr = (world_x_arr * self.world.tile_size - self.world_camera_x) * self.topdown_zoom + self.screen_width // 2
-        screen_y_arr = (world_y_arr * self.world.tile_size - self.world_camera_y) * self.topdown_zoom + self.screen_height // 2
-        
-        visible_mask = (in_bounds &
-                        (screen_x_arr + tile_size_px > 0) & (screen_x_arr < self.screen_width) &
-                        (screen_y_arr + tile_size_px > 0) & (screen_y_arr < self.screen_height))
-        xs, ys = np.nonzero(visible_mask)
-        for x, y in zip(xs.tolist(), ys.tolist()):
-            visible_tiles.append((int(world_x_arr[x, y]), int(world_y_arr[x, y]), screen_x_arr[x, y], screen_y_arr[x, y]))
-        
-        if self.current_layer == 0:
-            visible_tiles.sort(key=lambda t: -self.world.get_height(t[0], t[1]))
-        
-        return visible_tiles
-    
     def _deterministic_fraction(self, world_x, world_y, salt=0):
         h = (world_x * 73856093) ^ (world_y * 19349663) ^ (self.world.seed * 83492791) ^ (salt * 2654435761)
         h &= 0xffffffff
@@ -898,6 +879,34 @@ class DualViewRenderer:
         index = min(index, len(variants) - 1)
         return variants[index]
     
+    def _get_tinted_sprite(self, key_prefix, raw_surface, color):
+        qcolor = (color[0] & ~7, color[1] & ~7, color[2] & ~7)
+        key = (key_prefix, qcolor)
+        cached = self._tint_cache.get(key)
+        if cached is not None:
+            return cached
+        
+        tinted = raw_surface.copy()
+        tinted.fill((*qcolor, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        
+        if len(self._tint_cache) > 800:
+            self._tint_cache.clear()
+        self._tint_cache[key] = tinted
+        return tinted
+    
+    def _tile_has_stone(self, world_x, world_y):
+        return self._deterministic_fraction(world_x, world_y, salt=3) < self.stone_density
+    
+    def _tile_stone_variant(self, world_x, world_y, variants):
+        if not variants:
+            return None
+        index = int(self._deterministic_fraction(world_x, world_y, salt=4) * len(variants))
+        index = min(index, len(variants) - 1)
+        return variants[index]
+    
+    def _tile_has_tree(self, world_x, world_y):
+        return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
+    
     def render_tile_isometric(self, x, y, screen_x, screen_y, alpha=1.0, chunk_x=None, chunk_y=None):
         if chunk_x is None:
             chunk_x = self.current_chunk_x
@@ -908,7 +917,12 @@ class DualViewRenderer:
         world_x = chunk_x * self.world.chunk_size + x
         world_y = chunk_y * self.world.chunk_size + y
         
-        color = self.world.get_tile(world_x, world_y, self.current_layer)
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        
+        if chunk is None:
+            color = self.world.get_tile(world_x, world_y, self.current_layer)
+        else:
+            color = self.world.get_tile_color(chunk, x, y, self.current_layer)
         
         if len(color) > 3:
             color = color[:3]
@@ -921,8 +935,13 @@ class DualViewRenderer:
         
         # Effects for different tile types
         if self.current_layer == 0:
-            tile_type = self.world.get_tile_type(world_x, world_y)
-            height = self.world.get_height(world_x, world_y)
+            size = self.world.chunk_size
+            if chunk is not None:
+                tile_type = int(chunk['tile_map'][x, y])
+                height = float(chunk['height_map'][x, y])
+            else:
+                tile_type = self.world.get_tile_type(world_x, world_y)
+                height = self.world.get_height(world_x, world_y)
             
             if tile_type <= 2:
                 wave = math.sin((world_x + world_y) * 0.3 + self.water_phase) * 8
@@ -933,9 +952,13 @@ class DualViewRenderer:
                               self.world.tile_types['high_peaks'],
                               self.world.tile_types['snow']]:
                 if world_x > 0 and world_y > 0:
-                    h1 = self.world.get_height(world_x, world_y)
-                    h2 = self.world.get_height(world_x - 1, world_y)
-                    h3 = self.world.get_height(world_x, world_y - 1)
+                    h1 = height
+                    if chunk is not None and x > 0 and y > 0:
+                        h2 = float(chunk['height_map'][x - 1, y])
+                        h3 = float(chunk['height_map'][x, y - 1])
+                    else:
+                        h2 = self.world.get_height(world_x - 1, world_y)
+                        h3 = self.world.get_height(world_x, world_y - 1)
                     dx = h1 - h2
                     dy = h1 - h3
                     
@@ -949,9 +972,13 @@ class DualViewRenderer:
             
             elif tile_type == self.world.tile_types['hills']:
                 if world_x > 0 and world_y > 0:
-                    h1 = self.world.get_height(world_x, world_y)
-                    h2 = self.world.get_height(world_x - 1, world_y)
-                    h3 = self.world.get_height(world_x, world_y - 1)
+                    h1 = height
+                    if chunk is not None and x > 0 and y > 0:
+                        h2 = float(chunk['height_map'][x - 1, y])
+                        h3 = float(chunk['height_map'][x, y - 1])
+                    else:
+                        h2 = self.world.get_height(world_x - 1, world_y)
+                        h3 = self.world.get_height(world_x, world_y - 1)
                     dx = h1 - h2
                     dy = h1 - h3
                     facing = dx * self._light_dx + dy * self._light_dy
@@ -961,8 +988,8 @@ class DualViewRenderer:
             
             elif tile_type in [self.world.tile_types['forest'], 
                               self.world.tile_types['dense_forest']]:
-                if self.world.get_height(world_x, world_y) > 0.08:
-                    canopy_height = (self.world.get_height(world_x, world_y) - 0.08) * 40
+                if height > 0.08:
+                    canopy_height = (height - 0.08) * 40
                     color = tuple(min(255, c + int(canopy_height * 0.6)) for c in color)
             
 
@@ -997,9 +1024,8 @@ class DualViewRenderer:
         
         height_offset = 0
         if self.current_layer == 0:
-            height_value = self.world.get_height(world_x, world_y)
-            if height_value > 0:
-                height_offset = -int(height_value * 8 * zoom)
+            if height > 0:
+                height_offset = -int(height * 8 * zoom)
         
         points = [
             (screen_x, screen_y - quarter_tile + height_offset),
@@ -1015,35 +1041,34 @@ class DualViewRenderer:
                 diamond_texture = self.texture_manager.get_diamond_texture(biome_name, half_tile, quarter_tile)
         
         if diamond_texture is not None:
-            tinted = diamond_texture.copy()
-            tint_surface = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
-            tint_surface.fill((*color, 255))
-            tinted.blit(tint_surface, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            tinted = self._get_tinted_sprite(('diamond', biome_name, half_tile, quarter_tile), diamond_texture, color)
             rect = tinted.get_rect(center=(screen_x, screen_y + height_offset))
             self.screen.blit(tinted, rect)
         else:
             pygame.draw.polygon(self.screen, color, points)
         
         if self.current_layer == 0 and biome_name is not None:
-            grass_overlay = self.texture_manager.get_grass_overlay(biome_name, half_tile * 2)
+            grass_texture_name = self._GRASS_OVERLAY_TEXTURE_NAMES.get(biome_name, biome_name)
+            grass_overlay = self.texture_manager.get_grass_overlay(grass_texture_name, half_tile * 2)
             if grass_overlay is not None:
-                tinted_grass = grass_overlay.copy()
-                grass_tint = pygame.Surface(tinted_grass.get_size(), pygame.SRCALPHA)
-                grass_tint.fill((*color, 255))
-                tinted_grass.blit(grass_tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                tinted_grass = self._get_tinted_sprite(('grass', grass_texture_name, half_tile * 2), grass_overlay, color)
                 grass_rect = tinted_grass.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
                 self.screen.blit(tinted_grass, grass_rect)
             
-            # Tree overlay for dense_forest (по аналогии с grassland)
-            if biome_name == 'dense_forest':
-                tree_overlay = self.texture_manager.get_tree_overlay(biome_name, half_tile * 2)
+            overlay_texture_name = self._TREE_OVERLAY_TEXTURE_NAMES.get(biome_name)
+            if overlay_texture_name is not None:
+                tree_overlay = self.texture_manager.get_tree_overlay(overlay_texture_name, half_tile * 2)
                 if tree_overlay is not None:
-                    tinted_tree = tree_overlay.copy()
-                    tree_tint = pygame.Surface(tinted_tree.get_size(), pygame.SRCALPHA)
-                    tree_tint.fill((*color, 255))
-                    tinted_tree.blit(tree_tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                    tinted_tree = self._get_tinted_sprite(('tree', overlay_texture_name, half_tile * 2), tree_overlay, color)
                     tree_rect = tinted_tree.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
                     self.screen.blit(tinted_tree, tree_rect)
+            
+            if biome_name == 'dense_forest' and self._tile_has_tree(world_x, world_y):
+                tree_sprite = self.texture_manager.get_tree_overlay('dense_forest', half_tile * 2)
+                if tree_sprite is not None:
+                    tinted_random_tree = self._get_tinted_sprite(('tree', 'dense_forest', half_tile * 2), tree_sprite, color)
+                    random_tree_rect = tinted_random_tree.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
+                    self.screen.blit(tinted_random_tree, random_tree_rect)
         
         if (self.current_layer == 0 and biome_name == 'grassland' and self._flower_variants
                 and self._tile_has_flower(world_x, world_y)):
@@ -1051,12 +1076,20 @@ class DualViewRenderer:
 
             flower_sprite = self.texture_manager.get_flower_texture(variant, half_tile * 2)
             if flower_sprite is not None:
-                tinted_flower = flower_sprite.copy()
-                flower_tint = pygame.Surface(tinted_flower.get_size(), pygame.SRCALPHA)
-                flower_tint.fill((*color, 255))
-                tinted_flower.blit(flower_tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                tinted_flower = self._get_tinted_sprite(('flower', variant, half_tile * 2), flower_sprite, color)
                 flower_rect = tinted_flower.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
                 self.screen.blit(tinted_flower, flower_rect)
+        
+        stone_variants = self._stone_variants_by_biome.get(biome_name) if biome_name in self._STONE_BIOMES else None
+        if (self.current_layer == 0 and stone_variants
+                and self._tile_has_stone(world_x, world_y)):
+            variant = self._tile_stone_variant(world_x, world_y, stone_variants)
+
+            stone_sprite = self.texture_manager.get_stone_texture(variant, half_tile * 2)
+            if stone_sprite is not None:
+                tinted_stone = self._get_tinted_sprite(('stone', variant, half_tile * 2), stone_sprite, color)
+                stone_rect = tinted_stone.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
+                self.screen.blit(tinted_stone, stone_rect)
         
         if self.show_grid:
             grid_color = (30, 30, 30) if self.current_layer > 0 else (60, 60, 60)
@@ -1064,64 +1097,6 @@ class DualViewRenderer:
             
             if self.selected_tile == (world_x, world_y):
                 pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
-    
-    def render_tile_topdown(self, x, y, screen_x, screen_y):
-        world_x = self.current_chunk_x * self.world.chunk_size + x
-        world_y = self.current_chunk_y * self.world.chunk_size + y
-        
-        color = self.world.get_tile(world_x, world_y, self.current_layer)
-        if len(color) > 3:
-            color = color[:3]
-        color = tuple(max(0, min(255, int(c))) for c in color)
-        
-        tile_type = None
-        if self.current_layer == 0:
-            tile_type = self.world.get_tile_type(world_x, world_y)
-            color = self.sun.apply_tint(color)
-            light_r, light_g, light_b = self.lighting.get_tile_light_boost(world_x, world_y)
-            if light_r or light_g or light_b:
-                color = (
-                    min(255, int(color[0] + light_r)),
-                    min(255, int(color[1] + light_g)),
-                    min(255, int(color[2] + light_b)),
-                )
-        
-        tile_size_px = int(self.world.tile_size * self.topdown_zoom)
-        rect = pygame.Rect(screen_x, screen_y, tile_size_px, tile_size_px)
-        
-        square_texture = None
-        if tile_type is not None:
-            biome_name = self._biome_id_to_name.get(tile_type)
-            if biome_name is not None:
-                square_texture = self.texture_manager.get_square_texture(biome_name, tile_size_px)
-        
-        if square_texture is not None:
-            tinted = square_texture.copy()
-            tint_surface = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
-            tint_surface.fill((*color, 255))
-            tinted.blit(tint_surface, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            self.screen.blit(tinted, rect)
-        else:
-            pygame.draw.rect(self.screen, color, rect)
-        
-        if self.current_layer == 0:
-            height = self.world.get_height(world_x, world_y)
-            if height > 0.3:
-                shadow_offset = tile_size_px // 6
-                pygame.draw.line(self.screen, (40, 40, 40),
-                               (rect.right, rect.top),
-                               (rect.right + shadow_offset, rect.top + shadow_offset), 2)
-                pygame.draw.line(self.screen, (40, 40, 40),
-                               (rect.left, rect.bottom),
-                               (rect.left + shadow_offset, rect.bottom + shadow_offset), 2)
-        
-        if self.show_grid:
-            grid_color = (30, 30, 30) if self.current_layer > 0 else (60, 60, 60)
-            pygame.draw.rect(self.screen, grid_color, rect, 1)
-            
-            if self.selected_tile == (world_x, world_y):
-                pygame.draw.rect(self.screen, (255, 215, 0), rect, 3)
-    
     
     def render_minimap(self):
         minimap_size = 200
@@ -1162,12 +1137,8 @@ class DualViewRenderer:
         camera_tile_x = self.world_camera_x / self.world.tile_size
         camera_tile_y = self.world_camera_y / self.world.tile_size
         
-        if self.isometric_mode:
-            view_width = (self.screen_width / self.current_zoom) / self.world.tile_size * 1.5
-            view_height = (self.screen_height / self.current_zoom) / self.world.tile_size * 1.5
-        else:
-            view_width = (self.screen_width / self.topdown_zoom) / self.world.tile_size
-            view_height = (self.screen_height / self.topdown_zoom) / self.world.tile_size
+        view_width = (self.screen_width / self.current_zoom) / self.world.tile_size * 1.5
+        view_height = (self.screen_height / self.current_zoom) / self.world.tile_size * 1.5
         
         vis_width = view_width * scale_x
         vis_height = view_height * scale_y
@@ -1194,48 +1165,31 @@ class DualViewRenderer:
         if not visible_tiles:
             return None
         
-        if self.isometric_mode:
-            half_tile = self.world.tile_size * self.current_zoom / 2
-            quarter_tile = half_tile / 2
-            
-            top_tile = min(visible_tiles, key=lambda t: t[4])
-            bottom_tile = max(visible_tiles, key=lambda t: t[4])
-            left_tile = min(visible_tiles, key=lambda t: t[3])
-            right_tile = max(visible_tiles, key=lambda t: t[3])
-            
-            top = (top_tile[3], top_tile[4] - quarter_tile)
-            right = (right_tile[3] + half_tile, right_tile[4])
-            bottom = (bottom_tile[3], bottom_tile[4] + quarter_tile)
-            left = (left_tile[3] - half_tile, left_tile[4])
-            
-            # We enlarge the rhombus from its center—the area of ​​the rain is greater than the area...
-            # the chunk itself, rather than right up against its boundary.
-            points = [top, right, bottom, left]
-            center_x = sum(p[0] for p in points) / 4
-            center_y = sum(p[1] for p in points) / 4
-            scale = self.RAIN_AREA_SCALE
-            scaled_points = [
-                (center_x + (px - center_x) * scale, center_y + (py - center_y) * scale)
-                for px, py in points
-            ]
-            
-            return ('polygon', scaled_points)
-        else:
-            tile_size_px = self.world.tile_size * self.topdown_zoom * self.RAIN_AREA_SCALE
-            xs = [t[2] for t in visible_tiles]
-            ys = [t[3] for t in visible_tiles]
-            
-            min_x = max(0, min(xs) - tile_size_px)
-            max_x = min(self.screen_width, max(xs) + tile_size_px)
-            min_y = max(0, min(ys) - tile_size_px)
-            max_y = min(self.screen_height, max(ys) + tile_size_px)
-            
-            width = max_x - min_x
-            height = max_y - min_y
-            if width <= 0 or height <= 0:
-                return None
-            
-            return ('rect', (min_x, min_y, width, height))
+        half_tile = self.world.tile_size * self.current_zoom / 2
+        quarter_tile = half_tile / 2
+        
+        top_tile = min(visible_tiles, key=lambda t: t[4])
+        bottom_tile = max(visible_tiles, key=lambda t: t[4])
+        left_tile = min(visible_tiles, key=lambda t: t[3])
+        right_tile = max(visible_tiles, key=lambda t: t[3])
+        
+        top = (top_tile[3], top_tile[4] - quarter_tile)
+        right = (right_tile[3] + half_tile, right_tile[4])
+        bottom = (bottom_tile[3], bottom_tile[4] + quarter_tile)
+        left = (left_tile[3] - half_tile, left_tile[4])
+        
+        # We enlarge the rhombus from its center—the area of ​​the rain is greater than the area...
+        # the chunk itself, rather than right up against its boundary.
+        points = [top, right, bottom, left]
+        center_x = sum(p[0] for p in points) / 4
+        center_y = sum(p[1] for p in points) / 4
+        scale = self.RAIN_AREA_SCALE
+        scaled_points = [
+            (center_x + (px - center_x) * scale, center_y + (py - center_y) * scale)
+            for px, py in points
+        ]
+        
+        return ('polygon', scaled_points)
     
     # Biomes with snowfall (cold/high-altitude) and sandstorms (savanna).
     # Everything else (grass, forest, hills, water) uses rain.
@@ -1273,16 +1227,16 @@ class DualViewRenderer:
         
         id_to_category = self._get_sound_biome_ids()
         counts = {}
-        is_iso = self.isometric_mode
-        for tile in visible_tiles:
-            if is_iso:
-                depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y = tile
-            else:
-                tile_chunk_x, tile_chunk_y = self.current_chunk_x, self.current_chunk_y
-                x, y, screen_x, screen_y = tile
-            world_x = tile_chunk_x * self.world.chunk_size + x
-            world_y = tile_chunk_y * self.world.chunk_size + y
-            tile_type = self.world.get_tile_type(world_x, world_y)
+        
+        chunk_cache = {}
+        for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
+            chunk_key = (tile_chunk_x, tile_chunk_y)
+            chunk = chunk_cache.get(chunk_key, False)
+            if chunk is False:
+                chunk = self.world.get_chunk(tile_chunk_x, tile_chunk_y)
+                chunk_cache[chunk_key] = chunk
+            
+            tile_type = int(chunk['tile_map'][x, y]) if chunk is not None else 0
             category = id_to_category.get(tile_type, BIOME_PLAINS)
             counts[category] = counts.get(category, 0) + 1
         
@@ -1313,27 +1267,25 @@ class DualViewRenderer:
         sand_points = []
         
         zoom = self.current_zoom
-        is_iso = self.isometric_mode
+        chunk_cache = {}
         
-        for tile in visible_tiles:
-            if is_iso:
-                depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y = tile
+        for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
+            chunk_key = (tile_chunk_x, tile_chunk_y)
+            chunk = chunk_cache.get(chunk_key, False)
+            if chunk is False:
+                chunk = self.world.get_chunk(tile_chunk_x, tile_chunk_y)
+                chunk_cache[chunk_key] = chunk
+            
+            if chunk is not None:
+                height_value = float(chunk['height_map'][x, y])
+                tile_type = int(chunk['tile_map'][x, y])
             else:
-                tile_chunk_x, tile_chunk_y = self.current_chunk_x, self.current_chunk_y
-                x, y, screen_x, screen_y = tile
+                height_value = 0.0
+                tile_type = 0
             
-            world_x = tile_chunk_x * self.world.chunk_size + x
-            world_y = tile_chunk_y * self.world.chunk_size + y
+            height_offset = -int(height_value * 8 * zoom) if height_value > 0 else 0
+            point = (screen_x, screen_y + height_offset)
             
-            if is_iso:
-                height_value = self.world.get_height(world_x, world_y)
-                height_offset = -int(height_value * 8 * zoom) if height_value > 0 else 0
-                point = (screen_x, screen_y + height_offset)
-            else:
-                # In the top-down view, height does not shift the tile's position on the screen. (not used)
-                point = (screen_x, screen_y)
-            
-            tile_type = self.world.get_tile_type(world_x, world_y)
             if tile_type in snow_ids:
                 snow_points.append(point)
             elif tile_type in sand_ids:
@@ -1380,19 +1332,13 @@ class DualViewRenderer:
         self._light_dx, self._light_dy = self.sun.get_light_direction()
         self._sun_strength = max(0.15, self.sun.get_elevation())
         
-        if self.isometric_mode:
-            visible_tiles = self.get_visible_tiles_isometric()
-            for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
-                self.render_tile_isometric(x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y)
-        else:
-            visible_tiles = self.get_visible_tiles_topdown()
-            for x, y, screen_x, screen_y in visible_tiles:
-                self.render_tile_topdown(x, y, screen_x, screen_y)
+        visible_tiles = self.get_visible_tiles_isometric()
+        for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
+            self.render_tile_isometric(x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y)
         
         self.visible_tiles_count = len(visible_tiles)
         
-        pixels_per_tile = (self.world.tile_size * self.current_zoom if self.isometric_mode
-                           else self.world.tile_size * self.topdown_zoom)
+        pixels_per_tile = self.world.tile_size * self.current_zoom
         
 
         if self.current_layer == 0:
@@ -1463,16 +1409,13 @@ class DualViewRenderer:
         visible_percent = (self.visible_tiles_count / self.total_tiles) * 100
         fps = int(self.clock.get_fps())
         
-        #mode_text = "isometric" if self.isometric_mode else "top view"
-        #mode_color = (100, 255, 100) if self.isometric_mode else (100, 200, 255)   (not used)
-        
         layer_text = "surface"
         layer_color = (100, 255, 100)
         
         camera_tile_x = self.world_camera_x / self.world.tile_size
         camera_tile_y = self.world_camera_y / self.world.tile_size
         
-        zoom_text = f"ZOOM: {self.current_zoom:.2f}x{' (fix)' if not self.isometric_mode else ''}"
+        zoom_text = f"ZOOM: {self.current_zoom:.2f}x"
         
         chunk_count = len(self.world.loader.loaded)
         total_chunks = self.world.num_chunks_x * self.world.num_chunks_y
@@ -1559,30 +1502,20 @@ class DualViewRenderer:
             y_offset += 23 if line else 10
     
     def world_to_screen(self, tile_x, tile_y):
-        if self.isometric_mode:
-            iso_camera_x, iso_camera_y = self.get_isometric_camera_from_world()
-            iso_x, iso_y = self.world.cartesian_to_isometric(tile_x, tile_y)
-            screen_x = (iso_x - iso_camera_x) * self.current_zoom + self.screen_width // 2
-            screen_y = (iso_y - iso_camera_y) * self.current_zoom + self.screen_height // 2
-            return screen_x, screen_y
-        else:
-            screen_x = (tile_x * self.world.tile_size - self.world_camera_x) * self.topdown_zoom + self.screen_width // 2
-            screen_y = (tile_y * self.world.tile_size - self.world_camera_y) * self.topdown_zoom + self.screen_height // 2
-            return screen_x, screen_y
+        iso_camera_x, iso_camera_y = self.get_isometric_camera_from_world()
+        iso_x, iso_y = self.world.cartesian_to_isometric(tile_x, tile_y)
+        screen_x = (iso_x - iso_camera_x) * self.current_zoom + self.screen_width // 2
+        screen_y = (iso_y - iso_camera_y) * self.current_zoom + self.screen_height // 2
+        return screen_x, screen_y
     
     def screen_to_world(self, screen_x, screen_y):
-        if self.isometric_mode:
-            iso_camera_x, iso_camera_y = self.get_isometric_camera_from_world()
-            
-            iso_x = (screen_x - self.screen_width // 2) / self.current_zoom + iso_camera_x
-            iso_y = (screen_y - self.screen_height // 2) / self.current_zoom + iso_camera_y
-            
-            tile_x, tile_y = self.world.isometric_to_cartesian(iso_x, iso_y)
-            return tile_x * self.world.tile_size, tile_y * self.world.tile_size
-        else:
-            world_x = (screen_x - self.screen_width // 2) / self.topdown_zoom + self.world_camera_x
-            world_y = (screen_y - self.screen_height // 2) / self.topdown_zoom + self.world_camera_y
-            return world_x, world_y
+        iso_camera_x, iso_camera_y = self.get_isometric_camera_from_world()
+        
+        iso_x = (screen_x - self.screen_width // 2) / self.current_zoom + iso_camera_x
+        iso_y = (screen_y - self.screen_height // 2) / self.current_zoom + iso_camera_y
+        
+        tile_x, tile_y = self.world.isometric_to_cartesian(iso_x, iso_y)
+        return tile_x * self.world.tile_size, tile_y * self.world.tile_size
     
     def select_tile_at_screen(self, screen_x, screen_y):
         world_px_x, world_px_y = self.screen_to_world(screen_x, screen_y)
@@ -1644,7 +1577,6 @@ class DualViewRenderer:
                         self.world_camera_y = self.world.height * self.world.tile_size // 2
                         self.target_world_camera_x = self.world_camera_x
                         self.target_world_camera_y = self.world_camera_y
-                        self.target_isometric_zoom = 1.5
                     elif event.key == pygame.K_F1:
                         show_help = not show_help
                     elif event.key == pygame.K_F2:
@@ -1671,12 +1603,6 @@ class DualViewRenderer:
                         if not clicked_minimap and self.show_grid and self.selected_tile is not None:
                             
                             self.lighting.toggle_light_at(*self.selected_tile)
-                    elif event.button == 4:
-                        if self.isometric_mode:
-                            self.target_isometric_zoom = min(3.0, self.target_isometric_zoom + 0.2)
-                    elif event.button == 5:
-                        if self.isometric_mode:
-                            self.target_isometric_zoom = max(1.5, self.target_isometric_zoom - 0.2)
                 elif event.type == pygame.MOUSEMOTION:
                     if event.buttons[2]:
                         self.target_world_camera_x -= event.rel[0] / self.current_zoom
@@ -1740,8 +1666,8 @@ class DualViewRenderer:
             y += 30
         
         y += 10
-        mode_text = f"РЕЖИМ: {'isometric' if self.isometric_mode else 'top view'}"
-        mode_surface = self.font.render(mode_text, True, (100, 255, 100) if self.isometric_mode else (100, 200, 255))
+        mode_text = "РЕЖИМ: isometric"
+        mode_surface = self.font.render(mode_text, True, (100, 255, 100))
         help_surface.blit(mode_surface, (50, y))
         
         y += 30
