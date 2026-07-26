@@ -14,8 +14,8 @@ GRASS_SEARCH_DIRS = [
 ]
 
 TREE_SEARCH_DIRS = [
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textures', 'trees'),
-    '/textures/trees',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textures', 'other'),
+    '/textures/other',
 ]
 
 SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp')
@@ -23,6 +23,11 @@ SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp')
 FLOWER_SEARCH_DIRS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textures', 'flowers'),
     '/textures/flowers',
+]
+
+STONE_SEARCH_DIRS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textures', 'stones'),
+    '/textures/stones',
 ]
 
 
@@ -49,11 +54,13 @@ def _describe_dir_contents(directories):
 
 class TextureManager:
 
-    def __init__(self, search_dirs=None, grass_search_dirs=None, tree_search_dirs=None, flower_search_dirs=None):
+    def __init__(self, search_dirs=None, grass_search_dirs=None, tree_search_dirs=None,
+                 flower_search_dirs=None, stone_search_dirs=None):
         self.search_dirs = search_dirs or TEXTURE_SEARCH_DIRS
         self.grass_search_dirs = grass_search_dirs or GRASS_SEARCH_DIRS
         self.tree_search_dirs = tree_search_dirs or TREE_SEARCH_DIRS
         self.flower_search_dirs = flower_search_dirs or FLOWER_SEARCH_DIRS
+        self.stone_search_dirs = stone_search_dirs or STONE_SEARCH_DIRS
         self._raw_cache = {}       # biome_name -> pygame.Surface | _MISSING
         self._diamond_cache = {}   # (biome_name, w, h) -> pygame.Surface (diamond, per-pixel alpha)
         self._square_cache = {}    # (biome_name, size) -> pygame.Surface (for top-down mode)
@@ -61,6 +68,10 @@ class TextureManager:
         self._grass_scaled_cache = {}  # (biome_name, width_px) -> pygame.Surface
         self._tree_raw_cache = {}    # biome_name -> pygame.Surface | _MISSING
         self._tree_scaled_cache = {}  # (biome_name, width_px) -> pygame.Surface
+        self._stone_variants_by_biome = {}  # biome_name -> list of variant names
+        self._stone_paths = {}         # variant_name -> full path (across all biomes)
+        self._stone_raw_cache = {}    # variant_name -> pygame.Surface
+        self._stone_scaled_cache = {}  # (variant_name, width_px) -> pygame.Surface
         self._flower_variants = None   # list of variant names, discovered lazily
         self._flower_raw_cache = {}    # variant_name -> pygame.Surface
         self._flower_scaled_cache = {}  # (variant_name, width_px) -> pygame.Surface
@@ -114,8 +125,6 @@ class TextureManager:
 
         diamond = self._square_to_diamond(raw, target_w, target_h)
 
-        # Zoom changes continuously while animating, so this cache can pick
-        # up a lot of transient sizes — keep it from growing forever.
         if len(self._diamond_cache) > 300:
             self._diamond_cache.clear()
         self._diamond_cache[key] = diamond
@@ -318,6 +327,74 @@ class TextureManager:
         self._flower_scaled_cache[key] = scaled
         return scaled
 
+    def discover_stones(self, biome_name):
+        if biome_name in self._stone_variants_by_biome:
+            return self._stone_variants_by_biome[biome_name]
+
+        prefix = f'stone_{biome_name}_'
+        found = {}  # variant_name -> full path (first match wins, same as biome textures)
+        for directory in self.stone_search_dirs:
+            if not os.path.isdir(directory):
+                continue
+            for entry in sorted(os.listdir(directory)):
+                name, ext = os.path.splitext(entry)
+                if name.startswith(prefix) and ext.lower() in SUPPORTED_EXTENSIONS and name not in found:
+                    found[name] = os.path.join(directory, entry)
+
+        if not found:
+            searched = " or ".join(self.stone_search_dirs)
+            print(f"Texture manager: no stone sprites found for '{biome_name}' "
+                  f"(looked for {prefix}*.png/.jpg/.jpeg/.bmp in {searched}) — "
+                  f"no stones will be drawn on this biome\n"
+                  f"    -> {_describe_dir_contents(self.stone_search_dirs)}")
+
+        variants = sorted(found)
+        self._stone_variants_by_biome[biome_name] = variants
+        self._stone_paths.update(found)
+        return variants
+
+    def _load_raw_stone(self, variant_name):
+        if variant_name in self._stone_raw_cache:
+            cached = self._stone_raw_cache[variant_name]
+            return None if cached is _MISSING else cached
+
+        path = self._stone_paths.get(variant_name)
+        if path is None:
+            self._stone_raw_cache[variant_name] = _MISSING
+            return None
+
+        try:
+            surface = pygame.image.load(path).convert_alpha()
+        except Exception as e:
+            print(f"Texture manager: failed to load stone sprite '{variant_name}' from {path}: {e}")
+            self._stone_raw_cache[variant_name] = _MISSING
+            return None
+
+        print(f"Texture manager: loaded stone sprite '{variant_name}' from {path}")
+        self._stone_raw_cache[variant_name] = surface
+        return surface
+
+    def get_stone_texture(self, variant_name, width_px):
+        raw = self._load_raw_stone(variant_name)
+        if raw is None:
+            return None
+
+        width_px = max(2, int(round(width_px)))
+        key = (variant_name, width_px)
+        cached = self._stone_scaled_cache.get(key)
+        if cached is not None:
+            return cached
+
+        raw_w, raw_h = raw.get_size()
+        scale = width_px / raw_w
+        height_px = max(2, int(round(raw_h * scale)))
+        scaled = pygame.transform.smoothscale(raw, (width_px, height_px))
+
+        if len(self._stone_scaled_cache) > 300:
+            self._stone_scaled_cache.clear()
+        self._stone_scaled_cache[key] = scaled
+        return scaled
+
     def get_square_texture(self, biome_name, size_px):
         raw = self._load_raw(biome_name)
         if raw is None:
@@ -342,6 +419,7 @@ class TextureManager:
         self._grass_scaled_cache.clear()
         self._tree_scaled_cache.clear()
         self._flower_scaled_cache.clear()
+        self._stone_scaled_cache.clear()
 
     def reload(self):
         self._raw_cache.clear()
@@ -349,4 +427,7 @@ class TextureManager:
         self._tree_raw_cache.clear()
         self._flower_raw_cache.clear()
         self._flower_variants = None
+        self._stone_raw_cache.clear()
+        self._stone_variants_by_biome = {}
+        self._stone_paths = {}
         self.clear_cache()
