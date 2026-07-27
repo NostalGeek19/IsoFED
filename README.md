@@ -64,6 +64,144 @@ textures/
     └── ...
 ```
 
+### Object Placement
+
+The `object_system.py` module handles placing objects (cubes, stairs, etc.)
+in the world — following the same logic as the manual light placement
+(`lighting_system.py`): it works on top of the active grid, and clicking a
+tile places or removes an object.
+
+## Activation
+
+The whole object-placement mechanic is only available while the grid is on:
+
+| Key | Action |
+|---|---|
+| `G` | Show/hide the tile grid |
+| `O` | Toggle click mode: **light** ↔ **object** |
+
+If the grid is off, clicks on the world don't do anything (other than the
+usual camera controls).
+
+## Placing objects
+
+While the grid is active and the placement mode is `object`:
+
+| Action | Result |
+|---|---|
+| Left click on a tile | Place the currently selected object on top of the stack on that tile |
+| Right click on a tile | Remove the top object from the stack on that tile |
+| `TAB` | Cycle through the list of object types (changes the selected type) |
+| `I` | Show/hide the object picker panel on the right (see below) |
+| `F` | Mirror the object horizontally (see "Mirroring") |
+
+### Stacks (placement height)
+
+Objects can be stacked on top of each other on a single tile — like blocks
+in Minecraft. The maximum stack height is set by the `MAX_STACK_HEIGHT`
+constant in `object_system.py` (default **4**). Once a stack is full, left
+click on that tile stops placing new blocks until you remove the top one
+with a right click.
+
+### Placement preview
+
+While the grid is active and a tile is selected, a semi-transparent
+"ghost" of the currently selected object is drawn over it:
+
+- shows the **exact level** the next block will be placed at (taking
+  already-stacked blocks into account);
+- outlines the tile with a white border so the placement spot is
+  unambiguous;
+- shows nothing if the stack is already full — it's immediately clear
+  there's nowhere left to place a block.
+
+### Mirroring (`F`)
+
+Useful for asymmetric objects (stairs):
+
+- if the selected tile already has an object — `F` mirrors the **top**
+  block of the stack horizontally;
+- if the tile is empty — `F` toggles a "mirror the next placement" flag;
+  this is immediately reflected in the ghost preview and in the status
+  line (`[mirrored]`).
+
+## Object picker panel (`I`)
+
+While the grid is active, `I` opens a panel on the right listing all
+available object types:
+
+- each entry shows a texture preview (or a placeholder if the texture
+  isn't on disk) and a label;
+- the currently selected type is highlighted with a yellow border;
+- clicking a slot selects that type **and** switches the placement mode
+  to `object`.
+
+## Available object types
+
+| Type | Texture file | Notes |
+|---|---|---|
+| `wooden_cube` | `wooden_cube.png` | plain block |
+| `stone_cube` | `stone_cube.png` | plain block |
+| `water_cube` | `water_cube.png` | plain block |
+| `lava_cube` | `lava_cube.png` | glows with a warm, flickering light |
+| `lamp_cube` | `lamp_cube.png` | glows with a steady warm light |
+| `wooden_stairs` | `wooden_stairs.png` | asymmetric — supports mirroring |
+| `stone_stairs` | `stone_stairs.png` | asymmetric — supports mirroring |
+
+Textures are looked up in `textures/objects/<name>.png` (or
+`.jpg/.jpeg/.bmp`) next to the scripts, or in `/textures/objects`. If a
+file is missing, a simple isometric placeholder box is drawn instead so
+the placement spot is still visible — and the whole mechanic (stacking,
+mirroring, lighting) keeps working regardless.
+
+## Reacting to lighting
+
+All placed objects (regardless of type) are tinted according to the
+current scene lighting — the same way the ground and trees are:
+
+- the day/night cycle (`sun_system.py`);
+- light from placed lamps (`lighting_system.py`);
+- lightning flashes during a storm (`thunderstorm_system.py`).
+
+This works through `light_fn` — a `(tile_x, tile_y) -> (r, g, b)` function
+passed into `ObjectSystem.render(...)`.
+
+### Light-emitting cubes
+
+`lava_cube` and `lamp_cube` don't just look lit — they **are** light
+sources: placing one on a tile automatically registers a real light in
+`LightingSystem` (color/radius/brightness taken from
+`OBJECT_TYPES[...]['light']`), which lights up everything around it.
+Removing the cube automatically removes the light. If a stack has several
+glowing cubes, the topmost one is the one that lights up. `lava_cube` also
+flickers slightly (the `flicker` parameter), while `lamp_cube` shines
+steadily.
+
+Lights registered this way don't get confused with lights the player
+places manually (`light` mode + click, via `toggle_light_at`) — they're
+tracked separately.
+
+## Adding a new object type
+
+All it takes is one entry in `OBJECT_TYPES` in `object_system.py`:
+
+```python
+'stone_crate': {
+    'label': 'Stone Crate',        # name shown in the picker panel
+    'texture': 'stone_crate',      # texture filename without extension
+    'width_scale': 1.0,            # sprite width relative to the tile
+    'level_height_scale': 0.5,     # height of one stack level
+    # optional — if the object should glow:
+    # 'light': {'color': (255, 200, 120), 'radius': 4.0,
+    #           'intensity': 1.0, 'flicker': 0.0},
+},
+```
+
+The new type will immediately show up in the picker panel (`I`), in the
+`TAB` cycle, and will fully support stacking/mirroring/lighting — no
+changes needed anywhere else in the code.
+
+
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
 - Biome ambience loads from your own audio files (`sound/bioms/forest.*`, `plains.*`, `desert.*`, `water.*`, `mountains.*`, `swamp.*` — `.wav`/`.mp3`/`.ogg`, first match wins). Any biome missing a file falls back to a procedurally generated wind/water/critter texture so the game is never silent, with a clear console warning telling you exactly which file to add.
