@@ -191,7 +191,7 @@ Lights registered this way don't get confused with lights the player
 places manually (`light` mode + click, via `toggle_light_at`) — they're
 tracked separately.
 
-## Adding a new object type
+### Adding a new object type
 
 All it takes is one entry in `OBJECT_TYPES` in `object_system.py`:
 
