@@ -71,7 +71,7 @@ in the world — following the same logic as the manual light placement
 (`lighting_system.py`): it works on top of the active grid, and clicking a
 tile places or removes an object.
 
-## Activation
+### Activation
 
 The whole object-placement mechanic is only available while the grid is on:
 
@@ -83,7 +83,7 @@ The whole object-placement mechanic is only available while the grid is on:
 If the grid is off, clicks on the world don't do anything (other than the
 usual camera controls).
 
-## Placing objects
+### Placing objects
 
 While the grid is active and the placement mode is `object`:
 
@@ -125,7 +125,7 @@ Useful for asymmetric objects (stairs):
   this is immediately reflected in the ghost preview and in the status
   line (`[mirrored]`).
 
-## Object picker panel (`I`)
+### Object picker panel (`I`)
 
 While the grid is active, `I` opens a panel on the right listing all
 available object types:
@@ -136,7 +136,7 @@ available object types:
 - clicking a slot selects that type **and** switches the placement mode
   to `object`.
 
-## Available object types
+### Available object types
 
 | Type | Texture file | Notes |
 |---|---|---|
@@ -154,7 +154,7 @@ file is missing, a simple isometric placeholder box is drawn instead so
 the placement spot is still visible — and the whole mechanic (stacking,
 mirroring, lighting) keeps working regardless.
 
-## Reacting to lighting
+### Reacting to lighting
 
 All placed objects (regardless of type) are tinted according to the
 current scene lighting — the same way the ground and trees are:
@@ -167,6 +167,8 @@ This works through `light_fn` — a `(tile_x, tile_y) -> (r, g, b)` function
 passed into `ObjectSystem.render(...)`.
 
 ### Light-emitting cubes
+
+![World preview](screenshots/object_1.png)
 
 `lava_cube` and `lamp_cube` don't just look lit — they **are** light
 sources: placing one on a tile automatically registers a real light in
