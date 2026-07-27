@@ -224,6 +224,13 @@ changes needed anywhere else in the code.
 - Minimap with click-to-travel.
 ---
 
+## System requirements
+
+- CPU: dual core processor 1.6 Ghz.
+- GPU: Intel HD Graphics 400.
+- RAM: 4Gb.
+- OS: Windows 10/11; Linux.
+
 ## Requirements
 
 - Python 3.9+
