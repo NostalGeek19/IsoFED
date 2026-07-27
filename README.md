@@ -249,42 +249,51 @@ The world opens in fullscreen.
 ---
 
 ## Project structure
-
 The engine is deliberately split into small, self-contained modules. Each one only needs `update(dt)` called once per frame and takes the shared `screen` surface (or a couple of small helper callbacks) to render — none of them know about each other directly, so any one of them can be lifted out, replaced, or reused in a different project with minimal changes.
-
 ```
 .
-├── generation_world.py     # World generation, chunk streaming, camera/rendering, input, UI
+├── generation_wold.py      # World generation, chunk streaming, camera/rendering, input, UI
 ├── weather_system.py       # Rain / snow / sandstorm particles, biome crossfade
 ├── sun_system.py           # Day/night clock, ambient tint, directional shading, sun disc/rays
 ├── lighting_system.py      # Placeable lamps, tile light-boost, post/bulb rendering
+├── thunderstorm_system.py  # Lightning strikes during rain, screen flash, thunder audio
+├── object_system.py        # Placeable objects (cubes, stairs), stacking, mirroring, picker UI
 ├── sound_system.py         # Biome ambience (file-based) + procedural weather audio
 ├── texture_manager.py      # Texture loading, caching, and overlay management
 ├── sound/
-│   └── bioms/              # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+│   └── bioms/               # Drop your own forest.wav / plains.mp3 / etc. here (optional)
 └── textures/
-    ├── bioms/              # Base biome textures (.png format)
+    ├── bioms/               # Base biome textures (.png format)
     │   ├── grassland.png
     │   ├── dense_forest.png
     │   ├── forest.png
     │   └── ...
-    ├── grass/              # Grass overlays (with transparency)
+    ├── grass/               # Grass overlays (with transparency)
     │   └── grassland.png
-    ├── trees/              # Tree overlays (with transparency)
+    ├── trees/               # Tree overlays (with transparency)
     │   └── dense_forest.png
-    └── flowers/            # Flower sprites (with transparency)
-        ├── flower_red.png
-        ├── flower_blue.png
-        └── ...
+    ├── flowers/             # Flower sprites (with transparency)
+    │   ├── flower_red.png
+    │   ├── flower_blue.png
+    │   └── ...
+    └── objects/             # Placeable object textures (with transparency)
+        ├── wooden_cube.png
+        ├── stone_cube.png
+        ├── water_cube.png
+        ├── lava_cube.png
+        ├── lamp_cube.png
+        ├── wooden_stairs.png
+        └── stone_stairs.png
 ```
 
 ### Module responsibilities at a glance
-
 | Module | Owns | Talks to the world via |
 |---|---|---|
 | `weather_system.py` | Precipitation state machine, particle simulation, rendering | `set_area()` / `set_area_polygon()`, `set_biome_landing_points()`, `set_dominant_kind()` |
 | `sun_system.py` | Time of day, ambient tint, light direction, sun visuals | `apply_tint()`, `get_light_direction()`, `get_elevation()` |
 | `lighting_system.py` | Lamp placement & rendering | `toggle_light_at()`, `get_tile_light_boost()`, `render(..., chunk_bounds=...)` |
+| `thunderstorm_system.py` | Lightning strikes, thunder, storm state | `update(dt, weather_kind, weather_intensity, camera_tile_bounds, biome_at_fn, current_biome)`, `get_light_boost()`, `render()` |
+| `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes | `place_object_at()` / `remove_top_object_at()`, `render(..., light_fn=...)`, `render_preview()` |
 | `sound_system.py` | Ambient/weather audio playback | `set_dominant_biome()`, `set_weather()` |
 | `texture_manager.py` | Texture loading, caching, and overlay management | `get_diamond_texture()`, `get_grass_overlay()`, `get_tree_overlay()`, `get_flower_texture()` |
 
@@ -293,25 +302,32 @@ The engine is deliberately split into small, self-contained modules. Each one on
 ---
 
 ## Controls
-
 | Key | Action |
 |---|---|
 | `WASD` / Arrow keys | Move camera |
 | `Shift` + move | Move faster |
 | Right-click drag | Pan camera |
 | Left-click (minimap) | Jump camera to that point |
-| `G` | Toggle grid — hover to highlight a tile, click to place/remove a lamp |
+| `G` | Toggle grid — hover to highlight a tile |
+| `O` | Toggle grid-click mode: **light** ↔ **object** |
+| Left-click (grid, light mode) | Place/remove a lamp |
+| Left-click (grid, object mode) | Place the selected object on top of the stack |
+| Right-click (grid, object mode) | Remove the top object from the stack |
+| `TAB` | Cycle the selected object type |
+| `F` | Mirror the top object on the selected tile, or arm mirroring for the next placement |
+| `I` | Toggle info panel (grid off) / object picker panel (grid on) |
 | `M` | Toggle minimap |
-| `I` | Toggle info panel |
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
+| `9` / `0` | Decrease / increase thunderstorm chance |
+| `Y` | Force-start a thunderstorm right now |
+| `U` | Force a lightning strike right now |
 | `T` | Pause / resume the day-night clock |
 | `,` `.` | Step time back / forward one hour |
 | `-` / `=` | Master volume down / up |
 | `Ctrl+C` | Recenter camera on the world |
 | `F11` | Toggle fullscreen |
 | `Esc` | Quit |
-
 ---
 
 ## Adding your own biome ambience
