@@ -11,11 +11,12 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from weather_system import WeatherSystem, KIND_RAIN, KIND_SNOW, KIND_SAND
 from sun_system import SunSystem
-from lighting_system import LightingSystem
+from lighting_system import LightingSystem, Light
 from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
                            BIOME_WATER, BIOME_MOUNTAINS,
                            WEATHER_RAIN, WEATHER_SNOW, WEATHER_SAND)
 from thunderstorm_system import ThunderstormSystem
+from object_system import ObjectSystem
 from texture_manager import TextureManager
 
 
@@ -625,6 +626,7 @@ class DualViewRenderer:
 
         self.selected_tile = None
         self.show_info = True
+        self.show_object_picker = False   # панель выбора объекта справа, [I] при активной сетке
         self.show_minimap = True
         
         self.clock = pygame.time.Clock()
@@ -638,12 +640,18 @@ class DualViewRenderer:
         
         # The manual lighting mechanic (flashlights) is a separate module: `lighting_system.py`.
         self.lighting = LightingSystem()
+
+        # Placeable objects (wooden cube and future props)
+        self.objects = ObjectSystem()
+        self.placement_mode = 'light'   # 'light' or 'object', toggled with [O]
+        
+        self._object_light_tiles = {}
         
         # Sound is a separate module, sound_system.py: biome ambient sound
         self.sound = SoundSystem()
         self._sound_biome_category = None
 
-        # Thunderstorm mechanic (lightning during rain) — separate module,
+        # Thunderstorm mechanic (lightning during rain)
         self.storm = ThunderstormSystem(self.lighting, self.sound, storm_chance=0.25, debug=True)
         self._last_storm_bounds = None
         
@@ -884,6 +892,48 @@ class DualViewRenderer:
         index = min(index, len(variants) - 1)
         return variants[index]
     
+    def _sync_object_lights_at(self, tile_x, tile_y):
+        key = (int(tile_x), int(tile_y))
+        stack = self.objects.get_stack_at(tile_x, tile_y)
+
+        light_obj_type = None
+        light_config = None
+        for obj_type, _mirrored in reversed(stack):
+            config = self.objects.get_light_config(obj_type)
+            if config is not None:
+                light_obj_type = obj_type
+                light_config = config
+                break
+
+        if light_config is not None:
+            self.lighting.lights[key] = Light(
+                key[0], key[1],
+                color=light_config.get('color', (255, 200, 120)),
+                radius=light_config.get('radius', 4.0),
+                intensity=light_config.get('intensity', 1.0),
+            )
+            self._object_light_tiles[key] = light_obj_type
+        elif key in self._object_light_tiles:
+            self.lighting.lights.pop(key, None)
+            del self._object_light_tiles[key]
+
+    def _update_object_light_flicker(self):
+        if not self._object_light_tiles:
+            return
+        for key, obj_type in self._object_light_tiles.items():
+            config = self.objects.get_light_config(obj_type)
+            if not config:
+                continue
+            flicker_amp = config.get('flicker', 0.0)
+            if not flicker_amp:
+                continue
+            light = self.lighting.lights.get(key)
+            if light is None:
+                continue
+            base_intensity = config.get('intensity', 1.0)
+            phase = (key[0] * 12.9898 + key[1] * 78.233) % (2 * math.pi)
+            light.intensity = base_intensity + flicker_amp * math.sin(self.lava_phase + phase)
+
     def _get_tinted_sprite(self, key_prefix, raw_surface, color):
         qcolor = (color[0] & ~7, color[1] & ~7, color[2] & ~7)
         key = (key_prefix, qcolor)
@@ -898,6 +948,19 @@ class DualViewRenderer:
             self._tint_cache.clear()
         self._tint_cache[key] = tinted
         return tinted
+
+    def _object_light_color(self, tile_x, tile_y):
+
+        color = self.sun.apply_tint((255, 255, 255))
+
+        light_r, light_g, light_b = self.lighting.get_tile_light_boost(tile_x, tile_y)
+        storm_r, storm_g, storm_b = self.storm.get_light_boost(tile_x, tile_y)
+
+        return (
+            min(255, int(color[0] + light_r + storm_r)),
+            min(255, int(color[1] + light_g + storm_g)),
+            min(255, int(color[2] + light_b + storm_b)),
+        )
     
     def _tile_has_stone(self, world_x, world_y):
         return self._deterministic_fraction(world_x, world_y, salt=3) < self.stone_density
@@ -1349,6 +1412,7 @@ class DualViewRenderer:
         
         self.water_phase += 0.15
         self.lava_phase += 0.1
+        self._update_object_light_flicker()
         
         
         self._light_dx, self._light_dy = self.sun.get_light_direction()
@@ -1370,6 +1434,13 @@ class DualViewRenderer:
                 (self.current_chunk_x + 1) * size, (self.current_chunk_y + 1) * size,
             )
             self.lighting.render(self.screen, self.world_to_screen, pixels_per_tile, chunk_bounds=chunk_bounds)
+            self.objects.render(self.screen, self.world_to_screen, pixels_per_tile,
+                                 chunk_bounds=chunk_bounds, light_fn=self._object_light_color)
+
+            if (self.show_grid and self.placement_mode == 'object'
+                    and self.selected_tile is not None):
+                self.objects.render_preview(self.screen, self.world_to_screen,
+                                             pixels_per_tile, *self.selected_tile)
         
 
         if self.current_layer == 0:
@@ -1399,7 +1470,6 @@ class DualViewRenderer:
                 weather_sound_map = {KIND_RAIN: WEATHER_RAIN, KIND_SNOW: WEATHER_SNOW, KIND_SAND: WEATHER_SAND}
                 self.sound.set_weather(weather_sound_map.get(dominant_kind), self.weather.get_intensity())
 
-                # Thunderstorm: works only on top of rain (see weather_kind check inside ThunderstormSystem)
                 self._last_storm_bounds = chunk_bounds
                 storm_dt = self.clock.get_time() / 1000.0
                 self.storm.update(
@@ -1426,8 +1496,74 @@ class DualViewRenderer:
         if self.show_minimap:
             self.render_minimap()
         
+        if self.show_grid and self.show_object_picker:
+            self.render_object_picker()
+        
         pygame.display.flip()
     
+    def render_object_picker(self):
+        entries = self.objects.get_type_ids()
+        if not entries:
+            return
+
+        slot_size = 56
+        row_height = slot_size + 14
+        padding = 14
+        panel_width = 230
+        panel_height = padding * 2 + 30 + row_height * len(entries)
+        panel_x = self.screen_width - panel_width - 20
+        panel_y = 20
+
+        panel_key = (panel_width, panel_height)
+        if not hasattr(self, '_object_picker_panel') or self._object_picker_panel_key != panel_key:
+            self._object_picker_panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+            self._object_picker_panel_key = panel_key
+        self._object_picker_panel.fill((0, 0, 0, 180))
+        self.screen.blit(self._object_picker_panel, (panel_x, panel_y))
+
+        title = self.font.render("Objects [TAB / click]", True, (255, 255, 255))
+        self.screen.blit(title, (panel_x + padding, panel_y + 8))
+
+        selected_type = self.objects.get_selected_type()
+        self._object_picker_slots = []  # (rect, obj_type) для обработки клика
+
+        y = panel_y + 34
+        for obj_type in entries:
+            slot_rect = pygame.Rect(panel_x + padding, y, slot_size, slot_size)
+            is_selected = (obj_type == selected_type)
+            border_color = (255, 215, 0) if is_selected else (90, 90, 90)
+
+            pygame.draw.rect(self.screen, (25, 25, 25), slot_rect)
+
+            preview = self.objects.get_preview_texture(obj_type, slot_size - 10)
+            if preview is not None:
+                preview_rect = preview.get_rect(center=slot_rect.center)
+                self.screen.blit(preview, preview_rect)
+            else:
+                placeholder_rect = slot_rect.inflate(-18, -18)
+                pygame.draw.rect(self.screen, (191, 143, 90), placeholder_rect)
+                pygame.draw.rect(self.screen, (140, 100, 62), placeholder_rect, 2)
+
+            pygame.draw.rect(self.screen, border_color, slot_rect, 3 if is_selected else 1)
+
+            label_text = self.objects.get_label_for(obj_type)
+            label_color = (255, 230, 150) if is_selected else (200, 200, 200)
+            label = self.font.render(label_text, True, label_color)
+            self.screen.blit(label, (slot_rect.right + 12, slot_rect.centery - label.get_height() // 2))
+
+            self._object_picker_slots.append((slot_rect, obj_type))
+            y += row_height
+
+    def handle_object_picker_click(self, mouse_x, mouse_y):
+        if not (self.show_grid and self.show_object_picker):
+            return False
+        for rect, obj_type in getattr(self, '_object_picker_slots', []):
+            if rect.collidepoint(mouse_x, mouse_y):
+                self.objects.set_selected_type(obj_type)
+                self.placement_mode = 'object'
+                return True
+        return False
+
     def render_info(self):
         panel_rect = pygame.Rect(10, 10, 450, 500)
         
@@ -1472,9 +1608,11 @@ class DualViewRenderer:
             f"Sun: {self.sun.get_status_text()} [T pause, ,/. time]",
             f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
             f"lights: {self.lighting.count()} (grid [G])",
+            f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
             f"visible: {self.visible_tiles_count}",
             f"({visible_percent:.1f}%)",
+
         ]
         
         if 0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height:
@@ -1598,8 +1736,27 @@ class DualViewRenderer:
                         pygame.display.toggle_fullscreen()
                     elif event.key == pygame.K_g:
                         self.show_grid = not self.show_grid
+                    elif event.key == pygame.K_f:
+                        if self.show_grid and self.placement_mode == 'object':
+                            if self.selected_tile is not None and self.objects.has_object_at(*self.selected_tile):
+                                # На тайле уже что-то стоит — отражаем верхний блок стопки.
+                                self.objects.flip_top_object_at(*self.selected_tile)
+                            else:
+                                # Тайл пуст (или не выбран) — переключаем зеркало для
+                                # следующего размещения (видно и в превью, и в статусе).
+                                self.objects.toggle_mirror_next()
+                    elif event.key == pygame.K_o:
+                        self.placement_mode = 'object' if self.placement_mode == 'light' else 'light'
+                        print(f"Режим размещения: {self.placement_mode}")
+                    elif event.key == pygame.K_TAB:
+                        if self.placement_mode == 'object':
+                            self.objects.cycle_selected_type()
+                            print(f"Выбран объект: {self.objects.get_selected_label()}")
                     elif event.key == pygame.K_i:
-                        self.show_info = not self.show_info
+                        if self.show_grid:
+                            self.show_object_picker = not self.show_object_picker
+                        else:
+                            self.show_info = not self.show_info
                     elif event.key == pygame.K_m:
                         self.show_minimap = not self.show_minimap
                     elif event.key == pygame.K_r:
@@ -1640,12 +1797,21 @@ class DualViewRenderer:
                         print(f"Шанс грозы: {self.storm.get_storm_chance():.0%}")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
+                        clicked_picker = self.handle_object_picker_click(*event.pos)
                         clicked_minimap = False
-                        if self.show_minimap:
+                        if not clicked_picker and self.show_minimap:
                             clicked_minimap = self.handle_minimap_click(event.pos[0], event.pos[1])
-                        if not clicked_minimap and self.show_grid and self.selected_tile is not None:
-                            
-                            self.lighting.toggle_light_at(*self.selected_tile)
+                        if not clicked_picker and not clicked_minimap and self.show_grid and self.selected_tile is not None:
+                            if self.placement_mode == 'object':
+                                self.objects.place_object_at(*self.selected_tile)
+                                self._sync_object_lights_at(*self.selected_tile)
+                            else:
+                                self.lighting.toggle_light_at(*self.selected_tile)
+                    elif event.button == 3:
+                        if (self.show_grid and self.selected_tile is not None
+                                and self.placement_mode == 'object'):
+                            self.objects.remove_top_object_at(*self.selected_tile)
+                            self._sync_object_lights_at(*self.selected_tile)
                 elif event.type == pygame.MOUSEMOTION:
                     if event.buttons[2]:
                         self.target_world_camera_x -= event.rel[0] / self.current_zoom
@@ -1709,7 +1875,7 @@ class DualViewRenderer:
             y += 30
         
         y += 10
-        mode_text = "isometric mode"
+        mode_text = "РЕЖИМ: isometric"
         mode_surface = self.font.render(mode_text, True, (100, 255, 100))
         help_surface.blit(mode_surface, (50, y))
         
