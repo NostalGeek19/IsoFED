@@ -129,6 +129,8 @@ Useful for asymmetric objects (stairs):
 
 ### Object picker panel (`I`)
 
+![World preview](screenshots/object_5.png)
+
 While the grid is active, `I` opens a panel on the right listing all
 available object types:
 
