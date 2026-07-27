@@ -224,7 +224,7 @@ changes needed anywhere else in the code.
 - Minimap with click-to-travel.
 ---
 
-## System requirements
+## Minimum system requirements
 
 - CPU: dual core processor 1.6 Ghz.
 - GPU: Intel HD Graphics 400.
