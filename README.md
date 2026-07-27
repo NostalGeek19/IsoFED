@@ -105,6 +105,8 @@ with a right click.
 
 ### Placement preview
 
+![World preview](screenshots/object_3.png)
+
 While the grid is active and a tile is selected, a semi-transparent
 "ghost" of the currently selected object is drawn over it:
 
