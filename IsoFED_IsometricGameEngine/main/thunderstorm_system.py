@@ -94,7 +94,7 @@ class ThunderstormSystem:
         raining_now = (weather_kind == WEATHER_RAIN and weather_intensity > 0.05)
 
         if raining_now and not self._was_raining:
-            # дождь только что начался — с вероятностью storm_chance начинается гроза
+            # the rain has just started — a thunderstorm is starting with the probability of storm_chance
             self.storm_active = self.rng.random() < self.storm_chance
             self._time_to_next_strike = self._roll_next_interval()
             if self.debug:
