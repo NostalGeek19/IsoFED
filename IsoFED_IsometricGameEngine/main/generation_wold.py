@@ -15,6 +15,7 @@ from lighting_system import LightingSystem
 from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
                            BIOME_WATER, BIOME_MOUNTAINS,
                            WEATHER_RAIN, WEATHER_SNOW, WEATHER_SAND)
+from thunderstorm_system import ThunderstormSystem
 from texture_manager import TextureManager
 
 
@@ -641,6 +642,10 @@ class DualViewRenderer:
         # Sound is a separate module, sound_system.py: biome ambient sound
         self.sound = SoundSystem()
         self._sound_biome_category = None
+
+        # Thunderstorm mechanic (lightning during rain) — separate module,
+        self.storm = ThunderstormSystem(self.lighting, self.sound, storm_chance=0.25, debug=True)
+        self._last_storm_bounds = None
         
         # Custom per-tile textures — separate module, texture_manager.py.
         self.texture_manager = TextureManager()
@@ -1258,6 +1263,26 @@ class DualViewRenderer:
         
         return current
 
+    def _thunder_biome_at(self, tile_x, tile_y):
+        """Какой тип осадков идёт на конкретном тайле (KIND_RAIN/KIND_SNOW/
+        KIND_SAND) — используется ThunderstormSystem, чтобы молния била
+        только по тайлам, где реально идёт дождь, а не по снегу/песку рядом."""
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return None
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        if tile_type in self._get_snow_biome_ids():
+            return KIND_SNOW
+        if tile_type in self._get_sand_biome_ids():
+            return KIND_SAND
+        return KIND_RAIN
+
     def _compute_biome_landing_points(self, visible_tiles):
         snow_ids = self._get_snow_biome_ids()
         sand_ids = self._get_sand_biome_ids()
@@ -1376,12 +1401,27 @@ class DualViewRenderer:
                 self.sound.set_dominant_biome(sound_biome)
                 weather_sound_map = {KIND_RAIN: WEATHER_RAIN, KIND_SNOW: WEATHER_SNOW, KIND_SAND: WEATHER_SAND}
                 self.sound.set_weather(weather_sound_map.get(dominant_kind), self.weather.get_intensity())
+
+                # Thunderstorm: works only on top of rain (see weather_kind check inside ThunderstormSystem)
+                self._last_storm_bounds = chunk_bounds
+                storm_dt = self.clock.get_time() / 1000.0
+                self.storm.update(
+                    storm_dt,
+                    weather_kind=weather_sound_map.get(dominant_kind),
+                    weather_intensity=self.weather.get_intensity(),
+                    camera_tile_bounds=chunk_bounds,
+                    biome_at_fn=self._thunder_biome_at,
+                    current_biome=KIND_RAIN,
+                )
+                self.storm.render(self.screen, self.world_to_screen, pixels_per_tile)
             else:
                 self.sound.set_dominant_biome(None)
                 self.sound.set_weather(None, 0.0)
+                self.storm.update(self.clock.get_time() / 1000.0, weather_kind=None, weather_intensity=0.0)
         else:
             self.sound.set_dominant_biome(None)
             self.sound.set_weather(None, 0.0)
+            self.storm.update(self.clock.get_time() / 1000.0, weather_kind=None, weather_intensity=0.0)
         
         if self.show_info:
             self.render_info()
@@ -1431,18 +1471,13 @@ class DualViewRenderer:
             zoom_text,
             f"Grid: {'ON' if self.show_grid else 'OFF'} [G]",
             f"Map: {'ON' if self.show_minimap else 'OFF'} [M]",
-            f"",
-            f"",
             f"Weather: {self.weather.get_status_text()}density: {int(self.weather.get_density()*100)}%",
             f"Sun: {self.sun.get_status_text()} [T pause, ,/. time]",
-            f"",
-            f"",
+            f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
             f"lights: {self.lighting.count()} (grid [G])",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
-            f"",
             f"visible: {self.visible_tiles_count}",
             f"({visible_percent:.1f}%)",
-            f"",
         ]
         
         if 0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height:
@@ -1595,6 +1630,17 @@ class DualViewRenderer:
                         self.sound.set_master_volume(self.sound.get_master_volume() - 0.1)
                     elif event.key == pygame.K_EQUALS:
                         self.sound.set_master_volume(self.sound.get_master_volume() + 0.1)
+                    elif event.key == pygame.K_y:
+                        self.storm.force_start_storm()
+                    elif event.key == pygame.K_u:
+                        if self._last_storm_bounds is not None:
+                            self.storm.force_strike(self._last_storm_bounds, self._thunder_biome_at, KIND_RAIN)
+                    elif event.key == pygame.K_9:
+                        self.storm.set_storm_chance(self.storm.get_storm_chance() - 0.1)
+                        print(f"Шанс грозы: {self.storm.get_storm_chance():.0%}")
+                    elif event.key == pygame.K_0:
+                        self.storm.set_storm_chance(self.storm.get_storm_chance() + 0.1)
+                        print(f"Шанс грозы: {self.storm.get_storm_chance():.0%}")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         clicked_minimap = False
@@ -1666,7 +1712,7 @@ class DualViewRenderer:
             y += 30
         
         y += 10
-        mode_text = "РЕЖИМ: isometric"
+        mode_text = "isometric mode"
         mode_surface = self.font.render(mode_text, True, (100, 255, 100))
         help_surface.blit(mode_surface, (50, y))
         
