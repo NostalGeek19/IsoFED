@@ -138,6 +138,8 @@ available object types:
 
 ### Available object types
 
+![World preview](screenshots/object_2.png)
+
 | Type | Texture file | Notes |
 |---|---|---|
 | `wooden_cube` | `wooden_cube.png` | plain block |
