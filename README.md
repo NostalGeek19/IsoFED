@@ -160,6 +160,8 @@ mirroring, lighting) keeps working regardless.
 
 ### Reacting to lighting
 
+![World preview](screenshots/object_4.png)
+
 All placed objects (regardless of type) are tinted according to the
 current scene lighting — the same way the ground and trees are:
 
