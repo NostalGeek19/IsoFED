@@ -1264,9 +1264,6 @@ class DualViewRenderer:
         return current
 
     def _thunder_biome_at(self, tile_x, tile_y):
-        """Какой тип осадков идёт на конкретном тайле (KIND_RAIN/KIND_SNOW/
-        KIND_SAND) — используется ThunderstormSystem, чтобы молния била
-        только по тайлам, где реально идёт дождь, а не по снегу/песку рядом."""
         size = self.world.chunk_size
         tile_x, tile_y = int(tile_x), int(tile_y)
         chunk_x, chunk_y = tile_x // size, tile_y // size
