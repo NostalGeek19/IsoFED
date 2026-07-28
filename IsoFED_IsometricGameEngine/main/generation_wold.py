@@ -16,6 +16,7 @@ from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
                            BIOME_WATER, BIOME_MOUNTAINS,
                            WEATHER_RAIN, WEATHER_SNOW, WEATHER_SAND)
 from thunderstorm_system import ThunderstormSystem
+from fire_system import FireSystem
 from object_system import ObjectSystem
 from texture_manager import TextureManager
 
@@ -626,7 +627,7 @@ class DualViewRenderer:
 
         self.selected_tile = None
         self.show_info = True
-        self.show_object_picker = False   # панель выбора объекта справа, [I] при активной сетке
+        self.show_object_picker = False  
         self.show_minimap = True
         
         self.clock = pygame.time.Clock()
@@ -651,8 +652,14 @@ class DualViewRenderer:
         self.sound = SoundSystem()
         self._sound_biome_category = None
 
+        # Forest fires — separate module, fire_system.py. Lightning strikes
+        # roll a chance to ignite a tree; burning trees spread to adjacent
+        # trees after a delay.
+        self.fire = FireSystem(sound_system=self.sound)
+
         # Thunderstorm mechanic (lightning during rain)
-        self.storm = ThunderstormSystem(self.lighting, self.sound, storm_chance=0.25, debug=True)
+        self.storm = ThunderstormSystem(self.lighting, self.sound, storm_chance=0.25, debug=True,
+                                         on_strike=self._on_lightning_strike)
         self._last_storm_bounds = None
         
         # Custom per-tile textures — separate module, texture_manager.py.
@@ -955,11 +962,12 @@ class DualViewRenderer:
 
         light_r, light_g, light_b = self.lighting.get_tile_light_boost(tile_x, tile_y)
         storm_r, storm_g, storm_b = self.storm.get_light_boost(tile_x, tile_y)
+        fire_r, fire_g, fire_b = self.fire.get_light_boost(tile_x, tile_y)
 
         return (
-            min(255, int(color[0] + light_r + storm_r)),
-            min(255, int(color[1] + light_g + storm_g)),
-            min(255, int(color[2] + light_b + storm_b)),
+            min(255, int(color[0] + light_r + storm_r + fire_r)),
+            min(255, int(color[1] + light_g + storm_g + fire_g)),
+            min(255, int(color[2] + light_b + storm_b + fire_b)),
         )
     
     def _tile_has_stone(self, world_x, world_y):
@@ -974,6 +982,24 @@ class DualViewRenderer:
     
     def _tile_has_tree(self, world_x, world_y):
         return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
+
+    def _tile_blocks_object_placement(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return False
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        biome_name = self._biome_id_to_name.get(tile_type)
+        return biome_name == 'dense_forest' and self._tile_has_tree(tile_x, tile_y)
+
+    def _on_lightning_strike(self, tile_x, tile_y):
+        self.fire.try_ignite_from_lightning(tile_x, tile_y, self._tile_blocks_object_placement)
+
     
     def render_tile_isometric(self, x, y, screen_x, screen_y, alpha=1.0, chunk_x=None, chunk_y=None):
         if chunk_x is None:
@@ -1065,6 +1091,8 @@ class DualViewRenderer:
             
             
             light_r, light_g, light_b = self.lighting.get_tile_light_boost(world_x, world_y)
+            fire_r, fire_g, fire_b = self.fire.get_light_boost(world_x, world_y)
+            light_r, light_g, light_b = light_r + fire_r, light_g + fire_g, light_b + fire_b
             if light_r or light_g or light_b:
                 color = (
                     min(255, int(color[0] + light_r)),
@@ -1418,29 +1446,38 @@ class DualViewRenderer:
         self._light_dx, self._light_dy = self.sun.get_light_direction()
         self._sun_strength = max(0.15, self.sun.get_elevation())
         
+        pixels_per_tile = self.world.tile_size * self.current_zoom
+        size = self.world.chunk_size
+        
         visible_tiles = self.get_visible_tiles_isometric()
         for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
             self.render_tile_isometric(x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y)
+            if self.current_layer == 0:
+                world_x = tile_chunk_x * size + x
+                world_y = tile_chunk_y * size + y
+                self.objects.render_at_tile(self.screen, self.world_to_screen, pixels_per_tile,
+                                             world_x, world_y, light_fn=self._object_light_color)
+                if self.fire.is_burning_at(world_x, world_y):
+                    self.fire.render(self.screen, self.world_to_screen, pixels_per_tile,
+                                      chunk_bounds=(world_x, world_y, world_x + 1, world_y + 1))
         
         self.visible_tiles_count = len(visible_tiles)
         
-        pixels_per_tile = self.world.tile_size * self.current_zoom
-        
 
         if self.current_layer == 0:
-            size = self.world.chunk_size
             chunk_bounds = (
                 self.current_chunk_x * size, self.current_chunk_y * size,
                 (self.current_chunk_x + 1) * size, (self.current_chunk_y + 1) * size,
             )
             self.lighting.render(self.screen, self.world_to_screen, pixels_per_tile, chunk_bounds=chunk_bounds)
-            self.objects.render(self.screen, self.world_to_screen, pixels_per_tile,
-                                 chunk_bounds=chunk_bounds, light_fn=self._object_light_color)
 
             if (self.show_grid and self.placement_mode == 'object'
                     and self.selected_tile is not None):
+                blocked = self._tile_blocks_object_placement(*self.selected_tile)
                 self.objects.render_preview(self.screen, self.world_to_screen,
-                                             pixels_per_tile, *self.selected_tile)
+                                             pixels_per_tile, *self.selected_tile, blocked=blocked)
+
+            self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
         
 
         if self.current_layer == 0:
@@ -1525,7 +1562,7 @@ class DualViewRenderer:
         self.screen.blit(title, (panel_x + padding, panel_y + 8))
 
         selected_type = self.objects.get_selected_type()
-        self._object_picker_slots = []  # (rect, obj_type) для обработки клика
+        self._object_picker_slots = []  # (rect, obj_type)
 
         y = panel_y + 34
         for obj_type in entries:
@@ -1596,7 +1633,6 @@ class DualViewRenderer:
         info_lines = [
             f"FPS: {fps}",
             f"click [I] hide info",
-            f"",
             f"camera: ({int(self.world_camera_x)}, {int(self.world_camera_y)})",
             f"camera: ({camera_tile_x:.1f}, {camera_tile_y:.1f})",
             f"chunk: ({self.current_chunk_x}, {self.current_chunk_y})",
@@ -1607,6 +1643,7 @@ class DualViewRenderer:
             f"Weather: {self.weather.get_status_text()}density: {int(self.weather.get_density()*100)}%",
             f"Sun: {self.sun.get_status_text()} [T pause, ,/. time]",
             f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
+            f"Fire: {self.fire.get_status_text()} [L ignite selected tile]",
             f"lights: {self.lighting.count()} (grid [G])",
             f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
@@ -1736,22 +1773,22 @@ class DualViewRenderer:
                         pygame.display.toggle_fullscreen()
                     elif event.key == pygame.K_g:
                         self.show_grid = not self.show_grid
+                    elif event.key == pygame.K_l:
+                        if self.show_grid and self.selected_tile is not None:
+                            self.fire.ignite(*self.selected_tile)
                     elif event.key == pygame.K_f:
                         if self.show_grid and self.placement_mode == 'object':
                             if self.selected_tile is not None and self.objects.has_object_at(*self.selected_tile):
-                                # На тайле уже что-то стоит — отражаем верхний блок стопки.
                                 self.objects.flip_top_object_at(*self.selected_tile)
                             else:
-                                # Тайл пуст (или не выбран) — переключаем зеркало для
-                                # следующего размещения (видно и в превью, и в статусе).
                                 self.objects.toggle_mirror_next()
                     elif event.key == pygame.K_o:
                         self.placement_mode = 'object' if self.placement_mode == 'light' else 'light'
-                        print(f"Режим размещения: {self.placement_mode}")
+                        print(f"place mode: {self.placement_mode}")
                     elif event.key == pygame.K_TAB:
                         if self.placement_mode == 'object':
                             self.objects.cycle_selected_type()
-                            print(f"Выбран объект: {self.objects.get_selected_label()}")
+                            print(f"object selected: {self.objects.get_selected_label()}")
                     elif event.key == pygame.K_i:
                         if self.show_grid:
                             self.show_object_picker = not self.show_object_picker
@@ -1803,8 +1840,9 @@ class DualViewRenderer:
                             clicked_minimap = self.handle_minimap_click(event.pos[0], event.pos[1])
                         if not clicked_picker and not clicked_minimap and self.show_grid and self.selected_tile is not None:
                             if self.placement_mode == 'object':
-                                self.objects.place_object_at(*self.selected_tile)
-                                self._sync_object_lights_at(*self.selected_tile)
+                                if not self._tile_blocks_object_placement(*self.selected_tile):
+                                    self.objects.place_object_at(*self.selected_tile)
+                                    self._sync_object_lights_at(*self.selected_tile)
                             else:
                                 self.lighting.toggle_light_at(*self.selected_tile)
                     elif event.button == 3:
@@ -1875,7 +1913,7 @@ class DualViewRenderer:
             y += 30
         
         y += 10
-        mode_text = "РЕЖИМ: isometric"
+        mode_text = "isometric"
         mode_surface = self.font.render(mode_text, True, (100, 255, 100))
         help_surface.blit(mode_surface, (50, y))
         
