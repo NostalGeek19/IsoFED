@@ -59,11 +59,6 @@ class LightingSystem:
         return (total_r, total_g, total_b)
 
     def render(self, screen, world_to_screen_fn, pixels_per_tile, clip_rect=None, chunk_bounds=None):
-        """No visual lamp object is drawn at all — kept as a no-op (rather
-        than removed outright) so existing calls to lighting.render(...)
-        elsewhere don't need to change. The light still affects the ground
-        color around it (see get_tile_light_boost), it just isn't shown as
-        a physical post/bulb/glow on screen anymore."""
         return
 
     def render_placement_markers(self, screen, world_to_screen_fn, pixels_per_tile):
