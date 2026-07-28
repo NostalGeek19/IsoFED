@@ -132,7 +132,6 @@ class ObjectSystem:
         return mirrored
 
     # ------------------------------------------------------------------
-    # Размещение / снятие — стопка объектов на тайле
     def place_object_at(self, tile_x, tile_y, obj_type=None, mirrored=None):
         key = (int(tile_x), int(tile_y))
         stack = self.stacks.setdefault(key, [])
@@ -287,6 +286,25 @@ class ObjectSystem:
         self._scaled_cache.clear()
         self._tint_cache.clear()
 
+    def _draw_object(self, screen, obj_type, level, mirrored, screen_x, screen_y,
+                      pixels_per_tile, half_tile, quarter_tile, light_color=None):
+        type_info = OBJECT_TYPES.get(obj_type, {})
+        width_scale = type_info.get('width_scale', 1.0)
+        level_height_scale = type_info.get('level_height_scale', 0.5)
+        width_px = max(2, int(round(pixels_per_tile * width_scale)))
+        level_offset = level * pixels_per_tile * level_height_scale
+        base_y = screen_y + quarter_tile - level_offset
+
+        sprite = self._get_oriented(obj_type, width_px, mirrored)
+        if sprite is not None:
+            if light_color is not None:
+                sprite = self._get_tinted(obj_type, width_px, mirrored, sprite, light_color)
+            rect = sprite.get_rect(midbottom=(screen_x, base_y))
+            screen.blit(sprite, rect)
+        else:
+            self._draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile,
+                                         light_color, mirrored=mirrored)
+
     # ------------------------------------------------------------------
     def render(self, screen, world_to_screen_fn, pixels_per_tile, chunk_bounds=None, light_fn=None):
         if not self.stacks:
@@ -311,25 +329,30 @@ class ObjectSystem:
                     -half_tile * 6 <= screen_y <= screen_h + half_tile * 4):
                 continue
 
-            type_info = OBJECT_TYPES.get(obj.obj_type, {})
-            width_scale = type_info.get('width_scale', 1.0)
-            level_height_scale = type_info.get('level_height_scale', 0.5)
-            width_px = max(2, int(round(pixels_per_tile * width_scale)))
-            level_offset = obj.level * pixels_per_tile * level_height_scale
-            base_y = screen_y + quarter_tile - level_offset
-
             light_color = light_fn(obj.tile_x, obj.tile_y) if light_fn is not None else None
+            self._draw_object(screen, obj.obj_type, obj.level, obj.mirrored, screen_x, screen_y,
+                               pixels_per_tile, half_tile, quarter_tile, light_color)
 
-            sprite = self._get_oriented(obj.obj_type, width_px, obj.mirrored)
+    def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None):
+        key = (int(tile_x), int(tile_y))
+        stack = self.stacks.get(key)
+        if not stack:
+            return
 
-            if sprite is not None:
-                if light_color is not None:
-                    sprite = self._get_tinted(obj.obj_type, width_px, obj.mirrored, sprite, light_color)
-                rect = sprite.get_rect(midbottom=(screen_x, base_y))
-                screen.blit(sprite, rect)
-            else:
-                self._draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile,
-                                             light_color, mirrored=obj.mirrored)
+        screen_w, screen_h = screen.get_size()
+        screen_x, screen_y = world_to_screen_fn(tile_x, tile_y)
+        half_tile = pixels_per_tile / 2
+        quarter_tile = half_tile / 2
+
+        if not (-half_tile * 2 <= screen_x <= screen_w + half_tile * 2 and
+                -half_tile * 6 <= screen_y <= screen_h + half_tile * 4):
+            return
+
+        light_color = light_fn(tile_x, tile_y) if light_fn is not None else None
+
+        for level, (obj_type, mirrored) in enumerate(stack):
+            self._draw_object(screen, obj_type, level, mirrored, screen_x, screen_y,
+                               pixels_per_tile, half_tile, quarter_tile, light_color)
 
     @staticmethod
     def _draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile, light_color=None, mirrored=False):
@@ -374,7 +397,7 @@ class ObjectSystem:
         pygame.draw.polygon(screen, color_top, top_points)
         pygame.draw.polygon(screen, (60, 45, 30), top_points, 1)
 
-    def render_preview(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, alpha=140):
+    def render_preview(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, alpha=140, blocked=False):
         if self.is_stack_full(tile_x, tile_y):
             return
 
@@ -392,7 +415,11 @@ class ObjectSystem:
             (screen_x, screen_y + quarter_tile),
             (screen_x - half_tile, screen_y),
         ]
-        pygame.draw.polygon(screen, (255, 255, 255), diamond_points, 2)
+        outline_color = (225, 60, 60) if blocked else (255, 255, 255)
+        pygame.draw.polygon(screen, outline_color, diamond_points, 2)
+
+        if blocked:
+            return
 
         type_info = OBJECT_TYPES.get(obj_type, {})
         width_scale = type_info.get('width_scale', 1.0)
