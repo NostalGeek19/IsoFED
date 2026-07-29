@@ -981,6 +981,8 @@ class DualViewRenderer:
         return variants[index]
     
     def _tile_has_tree(self, world_x, world_y):
+        if self.fire.is_tree_suppressed(world_x, world_y):
+            return False
         return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
 
     def _tile_blocks_object_placement(self, tile_x, tile_y):
@@ -1147,7 +1149,13 @@ class DualViewRenderer:
             grass_texture_name = self._GRASS_OVERLAY_TEXTURE_NAMES.get(biome_name, biome_name)
             grass_overlay = self.texture_manager.get_grass_overlay(grass_texture_name, half_tile * 2)
             if grass_overlay is not None:
-                tinted_grass = self._get_tinted_sprite(('grass', grass_texture_name, half_tile * 2), grass_overlay, color)
+                grass_color = color
+                if biome_name == 'dense_forest':
+                    darken = self.fire.get_grass_darken(world_x, world_y)
+                    if darken > 0:
+                        mult = 1.0 - 0.6 * darken
+                        grass_color = tuple(max(0, int(c * mult)) for c in color)
+                tinted_grass = self._get_tinted_sprite(('grass', grass_texture_name, half_tile * 2), grass_overlay, grass_color)
                 grass_rect = tinted_grass.get_rect(midbottom=(screen_x, screen_y + quarter_tile + height_offset))
                 self.screen.blit(tinted_grass, grass_rect)
             
@@ -1469,6 +1477,7 @@ class DualViewRenderer:
                 self.current_chunk_x * size, self.current_chunk_y * size,
                 (self.current_chunk_x + 1) * size, (self.current_chunk_y + 1) * size,
             )
+            self.sound.set_active_chunk_bounds(chunk_bounds)
             self.lighting.render(self.screen, self.world_to_screen, pixels_per_tile, chunk_bounds=chunk_bounds)
 
             if (self.show_grid and self.placement_mode == 'object'
