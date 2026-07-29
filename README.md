@@ -224,7 +224,7 @@ changes needed anywhere else in the code.
 - Minimap with click-to-travel.
 ---
 
-### Screenshots
+### And more!
 ![World preview](screenshots/fire.png)
 ![World preview](screenshots/thunder.png)
 
