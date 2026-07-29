@@ -1828,7 +1828,7 @@ class DualViewRenderer:
                 f"",
                 f"({tile_x}, {tile_y})",
                 f"{type_name}",
-                f"h:{height:.2f}",
+                f"h:{height:.6f}",
             ])
             
             if self.current_layer > 0:
@@ -1949,7 +1949,7 @@ class DualViewRenderer:
     def run(self):
         """Main cycle"""
         running = True
-        show_help = False
+
         
         while running:
             self.dt = self.clock.get_time() / 16.67
@@ -1995,8 +1995,6 @@ class DualViewRenderer:
                         self.world_camera_y = self.world.height * self.world.tile_size // 2
                         self.target_world_camera_x = self.world_camera_x
                         self.target_world_camera_y = self.world_camera_y
-                    elif event.key == pygame.K_F1:
-                        show_help = not show_help
                     elif event.key == pygame.K_F2:
                         self.weather.toggle_rain()
                     elif event.key == pygame.K_LEFTBRACKET:
@@ -2020,10 +2018,10 @@ class DualViewRenderer:
                             self.storm.force_strike(self._last_storm_bounds, self._thunder_biome_at, KIND_RAIN)
                     elif event.key == pygame.K_9:
                         self.storm.set_storm_chance(self.storm.get_storm_chance() - 0.1)
-                        print(f"Шанс грозы: {self.storm.get_storm_chance():.0%}")
+                        print(f"chance: {self.storm.get_storm_chance():.0%}")
                     elif event.key == pygame.K_0:
                         self.storm.set_storm_chance(self.storm.get_storm_chance() + 0.1)
-                        print(f"Шанс грозы: {self.storm.get_storm_chance():.0%}")
+                        print(f"chance: {self.storm.get_storm_chance():.0%}")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         clicked_picker = self.handle_object_picker_click(*event.pos)
@@ -2095,8 +2093,7 @@ class DualViewRenderer:
             self.sound.update(self.clock.get_time() / 1000.0)
             self.render()
             
-            if show_help:
-                self.render_help()
+            
             
             self.clock.tick(60)
         
@@ -2105,47 +2102,6 @@ class DualViewRenderer:
         pygame.quit()
         sys.exit()
     
-    def render_help(self):
-        help_surface = pygame.Surface((750, 800), pygame.SRCALPHA)
-        help_surface.fill((0, 0, 0, 220))
-        
-        title = self.big_font.render("controls", True, (100, 255, 100))
-        help_surface.blit(title, (300, 20))
-        
-        controls = [
-            # :)
-        ]
-        
-        y = 80
-        for key, desc in controls:
-            if key == "":
-                y += 10
-                continue
-            
-            key_color = (255, 255, 0) if key in ["V", "C / E"] else ((200, 200, 0) if key in ["G", "M"] else (100, 255, 100))
-            desc_color = (255, 255, 0) if key in ["V", "C / E"] else (255, 255, 255)
-            
-            key_text = self.font.render(key, True, key_color)
-            desc_text = self.font.render(desc, True, desc_color)
-            
-            help_surface.blit(key_text, (50, y))
-            help_surface.blit(desc_text, (280, y))
-            y += 30
-        
-        y += 10
-        mode_text = "isometric"
-        mode_surface = self.font.render(mode_text, True, (100, 255, 100))
-        help_surface.blit(mode_surface, (50, y))
-        
-        y += 30
-        layer_text = "surface"
-        layer_surface = self.font.render(layer_text, True, (100, 255, 100))
-        help_surface.blit(layer_surface, (50, y))
-        
-        self.screen.blit(help_surface, 
-                        (self.screen_width // 2 - 375, 
-                         self.screen_height // 2 - 400))
-
 
 def main(): 
     # Generation world
