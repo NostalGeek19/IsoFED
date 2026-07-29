@@ -155,7 +155,6 @@ class ObjectSystem:
         return bool(self.stacks.get((int(tile_x), int(tile_y))))
 
     def get_stack_at(self, tile_x, tile_y):
-        """Список (obj_type, mirrored) на тайле снизу вверх (копия)."""
         return list(self.stacks.get((int(tile_x), int(tile_y)), []))
 
     def get_stack_height(self, tile_x, tile_y):
