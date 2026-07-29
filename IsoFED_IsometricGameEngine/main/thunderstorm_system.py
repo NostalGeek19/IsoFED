@@ -97,7 +97,7 @@ class ThunderstormSystem:
             self.storm_active = self.rng.random() < self.storm_chance
             self._time_to_next_strike = self._roll_next_interval()
             if self.debug:
-                print(f"[Thunderstorm] дождь начался, шанс грозы={self.storm_chance:.0%} -> "
+                print(f"[Thunderstorm] chance ={self.storm_chance:.0%} -> "
                       f"{'thunder' if self.storm_active else 'rain'}")
 
         if not raining_now:
