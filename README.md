@@ -224,6 +224,9 @@ changes needed anywhere else in the code.
 - Minimap with click-to-travel.
 ---
 
+### And more!
+![World preview](screenshots/fire.png)
+
 ## Minimum system requirements
 
 - CPU: dual core processor 1.6 Ghz.
