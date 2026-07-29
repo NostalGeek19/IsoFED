@@ -1751,7 +1751,7 @@ class DualViewRenderer:
         if not hasattr(self, 'info_panel'):
             self.info_panel = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
         
-        self.info_panel.fill((0, 0, 0, 180))
+        #self.info_panel.fill((0, 0, 0, 180))
         self.screen.blit(self.info_panel, panel_rect)
         
         mouse_x, mouse_y = pygame.mouse.get_pos()
