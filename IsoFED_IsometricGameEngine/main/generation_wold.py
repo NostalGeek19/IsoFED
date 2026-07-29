@@ -12,11 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 from weather_system import WeatherSystem, KIND_RAIN, KIND_SNOW, KIND_SAND
 from sun_system import SunSystem
 from lighting_system import LightingSystem, Light
+from camera_rotation_system import CameraRotationSystem
 from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
                            BIOME_WATER, BIOME_MOUNTAINS,
                            WEATHER_RAIN, WEATHER_SNOW, WEATHER_SAND)
 from thunderstorm_system import ThunderstormSystem
 from fire_system import FireSystem
+from digging_system import DiggingSystem
+from water_flow_system import WaterFlowSystem
 from object_system import ObjectSystem
 from texture_manager import TextureManager
 
@@ -608,6 +611,14 @@ class DualViewRenderer:
         self.world_camera_y = world.height * world.tile_size // 2
         self.target_world_camera_x = self.world_camera_x
         self.target_world_camera_y = self.world_camera_y
+
+        # Camera rotation (90° steps) — separate module, camera_rotation_system.py.
+        # Toggled with the middle mouse button (scroll-wheel click).
+        self.camera_rotation = CameraRotationSystem()
+
+        self._rotation_snapshot = None
+        self._rotation_fade = 0.0
+        self.ROTATION_FADE_DURATION = 0.18  # секунд
         
         # Current camera chunk
         self.current_chunk_x = int(self.world_camera_x / world.tile_size) // world.chunk_size
@@ -626,6 +637,9 @@ class DualViewRenderer:
         self.show_grid = False
 
         self.selected_tile = None
+        self.selection_anchor = None   
+        self.selected_tiles = []       
+        self.MAX_SELECTION_SIZE = 6    
         self.show_info = True
         self.show_object_picker = False  
         self.show_minimap = True
@@ -644,9 +658,19 @@ class DualViewRenderer:
 
         # Placeable objects (wooden cube and future props)
         self.objects = ObjectSystem()
-        self.placement_mode = 'light'   # 'light' or 'object', toggled with [O]
+        # Digging tiles (holes) — separate module, digging_system.py. Water
+        # flowing into holes near shallow_water is handled separately by
+        # water_flow_system.py.
+        self.digging = DiggingSystem()
+        self.water_flow = WaterFlowSystem(self.digging)
+
+        self._placement_modes = ('light', 'object', 'dig')
+        self.placement_mode = 'light'   # cycled with [O]
         
         self._object_light_tiles = {}
+
+        self._tree_regrow_timers = {}   # (tile_x, tile_y)
+        self.TREE_REGROW_DELAY_RANGE = (240.0, 300.0)
         
         # Sound is a separate module, sound_system.py: biome ambient sound
         self.sound = SoundSystem()
@@ -754,20 +778,25 @@ class DualViewRenderer:
             print(f"Jump to chunk: ({self.current_chunk_x}, {self.current_chunk_y})")
     
     def get_chunk_iso_coords(self, chunk_x, chunk_y):
-        key = f"{chunk_x},{chunk_y}"
+        is_default = self.camera_rotation.is_default_orientation()
+        key = f"{chunk_x},{chunk_y},{'0' if is_default else self.camera_rotation.get_cache_key()}"
         if key not in self.iso_coords:
             chunk = self.world.get_chunk(chunk_x, chunk_y)
-            if chunk is not None and 'iso_coords' in chunk:
+            if is_default and chunk is not None and 'iso_coords' in chunk:
                 self.iso_coords[key] = chunk['iso_coords']
             else:
                 size = self.world.chunk_size
                 xx, yy = np.meshgrid(np.arange(size), np.arange(size), indexing='ij')
                 world_x = xx + chunk_x * size
                 world_y = yy + chunk_y * size
+                vx, vy = self.camera_rotation.to_view_space(world_x, world_y)
                 half_tile = self.world.tile_size // 2
-                iso_x = (world_x - world_y) * half_tile
-                iso_y = (world_x + world_y) * (half_tile // 2)
-                self.iso_coords[key] = np.stack([iso_x, iso_y], axis=-1).astype(float)
+                iso_x = (vx - vy) * half_tile
+                iso_y = (vx + vy) * (half_tile // 2)
+                computed = np.stack([iso_x, iso_y], axis=-1).astype(float)
+                if len(self.iso_coords) > 200:
+                    self.iso_coords.clear()
+                self.iso_coords[key] = computed
         return self.iso_coords[key]
     
     def handle_input(self):
@@ -790,8 +819,10 @@ class DualViewRenderer:
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
             move_y = speed
         
-        self.target_world_camera_x += move_x
-        self.target_world_camera_y += move_y
+        delta_world_x, delta_world_y = self.camera_rotation.to_world_space(move_x, move_y)
+
+        self.target_world_camera_x += delta_world_x
+        self.target_world_camera_y += delta_world_y
         
         max_x = (self.world.width - 1) * self.world.tile_size
         max_y = (self.world.height - 1) * self.world.tile_size
@@ -838,7 +869,8 @@ class DualViewRenderer:
     def get_isometric_camera_from_world(self):
         center_tile_x = self.world_camera_x / self.world.tile_size
         center_tile_y = self.world_camera_y / self.world.tile_size
-        return self.world.cartesian_to_isometric(center_tile_x, center_tile_y)
+        vx, vy = self.camera_rotation.to_view_space(center_tile_x, center_tile_y)
+        return self.world.cartesian_to_isometric(vx, vy)
     
     def get_visible_tiles_isometric(self):
         visible_tiles = []
@@ -862,7 +894,8 @@ class DualViewRenderer:
                          (screen_y_arr + quarter_tile > 0) & (screen_y_arr - quarter_tile < self.screen_height))
         xs, ys = np.nonzero(visible_mask)
         for x, y in zip(xs.tolist(), ys.tolist()):
-            visible_tiles.append((x + y, x, y, screen_x_arr[x, y], screen_y_arr[x, y], 1.0,
+            vx, vy = self.camera_rotation.to_view_space(x, y)
+            visible_tiles.append((vx + vy, x, y, screen_x_arr[x, y], screen_y_arr[x, y], 1.0,
                                    self.current_chunk_x, self.current_chunk_y))
         
         # We add tiles from the old chunk for a smooth transition.
@@ -878,7 +911,8 @@ class DualViewRenderer:
                                  (old_screen_y_arr + quarter_tile > 0) & (old_screen_y_arr - quarter_tile < self.screen_height))
             old_xs, old_ys = np.nonzero(old_visible_mask)
             for x, y in zip(old_xs.tolist(), old_ys.tolist()):
-                visible_tiles.append((x + y + 10000, x, y, old_screen_x_arr[x, y], old_screen_y_arr[x, y], alpha,
+                vx, vy = self.camera_rotation.to_view_space(x, y)
+                visible_tiles.append((vx + vy + 10000, x, y, old_screen_x_arr[x, y], old_screen_y_arr[x, y], alpha,
                                        old_chunk_x, old_chunk_y))
         
         visible_tiles.sort(key=lambda t: t[0])
@@ -983,6 +1017,10 @@ class DualViewRenderer:
     def _tile_has_tree(self, world_x, world_y):
         if self.fire.is_tree_suppressed(world_x, world_y):
             return False
+        if (int(world_x), int(world_y)) in self._tree_regrow_timers:
+            return False
+        if self.objects.has_object_at(world_x, world_y):
+            return False
         return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
 
     def _tile_blocks_object_placement(self, tile_x, tile_y):
@@ -999,8 +1037,64 @@ class DualViewRenderer:
         biome_name = self._biome_id_to_name.get(tile_type)
         return biome_name == 'dense_forest' and self._tile_has_tree(tile_x, tile_y)
 
+    def _tile_blocks_digging(self, tile_x, tile_y):
+        if self.objects.has_object_at(tile_x, tile_y):
+            return True
+        if self._tile_blocks_object_placement(tile_x, tile_y):
+            return True
+        return False
+
+    def _start_tree_regrow_timer_if_needed(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        biome_name = self._biome_id_to_name.get(tile_type)
+        if biome_name != 'dense_forest':
+            return
+        if self._deterministic_fraction(tile_x, tile_y, salt=5) >= self.tree_density:
+            return  
+
+        key = (tile_x, tile_y)
+        if key in self._tree_regrow_timers:
+            return 
+
+        self._tree_regrow_timers[key] = random.uniform(*self.TREE_REGROW_DELAY_RANGE)
+
+    def _update_tree_regrow_timers(self, dt):
+        if not self._tree_regrow_timers:
+            return
+        expired = []
+        for key, remaining in self._tree_regrow_timers.items():
+            remaining -= dt
+            if remaining <= 0:
+                expired.append(key)
+            else:
+                self._tree_regrow_timers[key] = remaining
+        for key in expired:
+            del self._tree_regrow_timers[key]
+
     def _on_lightning_strike(self, tile_x, tile_y):
         self.fire.try_ignite_from_lightning(tile_x, tile_y, self._tile_blocks_object_placement)
+
+    def _tile_is_shallow_water(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return False
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        return tile_type == self.world.tile_types['shallow_water']
 
     
     def render_tile_isometric(self, x, y, screen_x, screen_y, alpha=1.0, chunk_x=None, chunk_y=None):
@@ -1101,6 +1195,31 @@ class DualViewRenderer:
                     min(255, int(color[1] + light_g)),
                     min(255, int(color[2] + light_b)),
                 )
+
+
+            if self.digging.is_dug(world_x, world_y):
+                color = self.digging.apply_darken(world_x, world_y, color)
+                water_info = self.water_flow.get_water_color(world_x, world_y)
+                if water_info is not None:
+                    water_color, water_strength = water_info
+
+
+                    lit_water_color = self.sun.apply_tint(water_color)
+                    if light_r or light_g or light_b:
+                        lit_water_color = (
+                            min(255, int(lit_water_color[0] + light_r)),
+                            min(255, int(lit_water_color[1] + light_g)),
+                            min(255, int(lit_water_color[2] + light_b)),
+                        )
+
+                    ripple = math.sin((world_x + world_y) * 0.3 + self.water_phase) * 8 * water_strength
+                    if ripple > 0:
+                        lit_water_color = tuple(max(0, min(255, int(c + ripple))) for c in lit_water_color)
+
+                    color = tuple(
+                        int(color[i] * (1 - water_strength) + lit_water_color[i] * water_strength)
+                        for i in range(3)
+                    )
         
         else:
             chunk = self.world.get_chunk(chunk_x, chunk_y)
@@ -1198,8 +1317,12 @@ class DualViewRenderer:
         if self.show_grid:
             grid_color = (30, 30, 30) if self.current_layer > 0 else (60, 60, 60)
             pygame.draw.polygon(self.screen, grid_color, points, 1)
-            
-            if self.selected_tile == (world_x, world_y):
+
+            if self.selected_tiles:
+                is_selected = (world_x, world_y) in self.selected_tiles
+            else:
+                is_selected = self.selected_tile == (world_x, world_y)
+            if is_selected:
                 pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
     
     def render_minimap(self):
@@ -1482,11 +1605,14 @@ class DualViewRenderer:
 
             if (self.show_grid and self.placement_mode == 'object'
                     and self.selected_tile is not None):
-                blocked = self._tile_blocks_object_placement(*self.selected_tile)
-                self.objects.render_preview(self.screen, self.world_to_screen,
-                                             pixels_per_tile, *self.selected_tile, blocked=blocked)
+                for tile in self._get_selection_tiles():
+                    blocked = self._tile_blocks_object_placement(*tile)
+                    self.objects.render_preview(self.screen, self.world_to_screen,
+                                                 pixels_per_tile, *tile, blocked=blocked)
 
             self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
+            self.water_flow.update(self.clock.get_time() / 1000.0, water_neighbor_fn=self._tile_is_shallow_water)
+            self._update_tree_regrow_timers(self.clock.get_time() / 1000.0)
         
 
         if self.current_layer == 0:
@@ -1536,6 +1662,15 @@ class DualViewRenderer:
             self.sound.set_weather(None, 0.0)
             self.storm.update(self.clock.get_time() / 1000.0, weather_kind=None, weather_intensity=0.0)
         
+        if self._rotation_snapshot is not None and self._rotation_fade > 0.0:
+            self._rotation_snapshot.set_alpha(int(255 * self._rotation_fade))
+            self.screen.blit(self._rotation_snapshot, (0, 0))
+            dt_seconds = self.clock.get_time() / 1000.0
+            self._rotation_fade -= dt_seconds / self.ROTATION_FADE_DURATION
+            if self._rotation_fade <= 0.0:
+                self._rotation_fade = 0.0
+                self._rotation_snapshot = None
+
         if self.show_info:
             self.render_info()
         
@@ -1651,10 +1786,14 @@ class DualViewRenderer:
             f"Map: {'ON' if self.show_minimap else 'OFF'} [M]",
             f"Weather: {self.weather.get_status_text()}density: {int(self.weather.get_density()*100)}%",
             f"Sun: {self.sun.get_status_text()} [T pause, ,/. time]",
+            f"Camera rotation: {self.camera_rotation.get_status_text()} [hold middle mouse + move to rotate]",
             f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
             f"Fire: {self.fire.get_status_text()} [L ignite selected tile]",
+            f"Digging: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
+            f"Tree regrowth: {len(self._tree_regrow_timers)} tile(s) waiting",
             f"lights: {self.lighting.count()} (grid [G])",
             f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror]",
+            f"Selection: {len(self._get_selection_tiles())} tile(s) [hold Shift + hover to select up to {self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
             f"visible: {self.visible_tiles_count}",
             f"({visible_percent:.1f}%)",
@@ -1719,7 +1858,8 @@ class DualViewRenderer:
     
     def world_to_screen(self, tile_x, tile_y):
         iso_camera_x, iso_camera_y = self.get_isometric_camera_from_world()
-        iso_x, iso_y = self.world.cartesian_to_isometric(tile_x, tile_y)
+        vx, vy = self.camera_rotation.to_view_space(tile_x, tile_y)
+        iso_x, iso_y = self.world.cartesian_to_isometric(vx, vy)
         screen_x = (iso_x - iso_camera_x) * self.current_zoom + self.screen_width // 2
         screen_y = (iso_y - iso_camera_y) * self.current_zoom + self.screen_height // 2
         return screen_x, screen_y
@@ -1730,7 +1870,8 @@ class DualViewRenderer:
         iso_x = (screen_x - self.screen_width // 2) / self.current_zoom + iso_camera_x
         iso_y = (screen_y - self.screen_height // 2) / self.current_zoom + iso_camera_y
         
-        tile_x, tile_y = self.world.isometric_to_cartesian(iso_x, iso_y)
+        vx, vy = self.world.isometric_to_cartesian(iso_x, iso_y)
+        tile_x, tile_y = self.camera_rotation.to_world_space(vx, vy)
         return tile_x * self.world.tile_size, tile_y * self.world.tile_size
     
     def select_tile_at_screen(self, screen_x, screen_y):
@@ -1740,9 +1881,50 @@ class DualViewRenderer:
         
         if 0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height:
             new_tile = (tile_x, tile_y)
-            if new_tile != self.selected_tile:
+
+            keys = pygame.key.get_pressed()
+            shift_held = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+
+            if shift_held:
+                if self.selection_anchor is None:
+                    self.selection_anchor = self.selected_tile or new_tile
                 self.selected_tile = new_tile
-                print(f"tile selected: ({tile_x}, {tile_y})")
+                self.selected_tiles = self._compute_selection_rect(self.selection_anchor, new_tile)
+            else:
+                if self.selection_anchor is not None or self.selected_tiles:
+                    self.selection_anchor = None
+                    self.selected_tiles = []
+                if new_tile != self.selected_tile:
+                    self.selected_tile = new_tile
+                    print(f"tile selected: ({tile_x}, {tile_y})")
+
+    def _compute_selection_rect(self, anchor, current):
+        ax, ay = anchor
+        bx, by = current
+
+        min_x, max_x = (ax, bx) if ax <= bx else (bx, ax)
+        min_y, max_y = (ay, by) if ay <= by else (by, ay)
+
+        limit = self.MAX_SELECTION_SIZE
+        if max_x - min_x + 1 > limit:
+            if bx >= ax:
+                max_x = min_x + limit - 1
+            else:
+                min_x = max_x - limit + 1
+        if max_y - min_y + 1 > limit:
+            if by >= ay:
+                max_y = min_y + limit - 1
+            else:
+                min_y = max_y - limit + 1
+
+        return [(x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1)]
+
+    def _get_selection_tiles(self):
+        if self.selected_tiles:
+            return self.selected_tiles
+        if self.selected_tile is not None:
+            return [self.selected_tile]
+        return []
     
     
     
@@ -1792,7 +1974,8 @@ class DualViewRenderer:
                             else:
                                 self.objects.toggle_mirror_next()
                     elif event.key == pygame.K_o:
-                        self.placement_mode = 'object' if self.placement_mode == 'light' else 'light'
+                        idx = self._placement_modes.index(self.placement_mode)
+                        self.placement_mode = self._placement_modes[(idx + 1) % len(self._placement_modes)]
                         print(f"place mode: {self.placement_mode}")
                     elif event.key == pygame.K_TAB:
                         if self.placement_mode == 'object':
@@ -1848,21 +2031,49 @@ class DualViewRenderer:
                         if not clicked_picker and self.show_minimap:
                             clicked_minimap = self.handle_minimap_click(event.pos[0], event.pos[1])
                         if not clicked_picker and not clicked_minimap and self.show_grid and self.selected_tile is not None:
+                            tiles = self._get_selection_tiles()
                             if self.placement_mode == 'object':
-                                if not self._tile_blocks_object_placement(*self.selected_tile):
-                                    self.objects.place_object_at(*self.selected_tile)
-                                    self._sync_object_lights_at(*self.selected_tile)
+                                for t in tiles:
+                                    if not self._tile_blocks_object_placement(*t):
+                                        self.objects.place_object_at(*t)
+                                        self._sync_object_lights_at(*t)
+                            elif self.placement_mode == 'dig':
+                                for t in tiles:
+                                    if not self._tile_blocks_digging(*t):
+                                        self.digging.dig_at(*t)
                             else:
-                                self.lighting.toggle_light_at(*self.selected_tile)
+                                for t in tiles:
+                                    self.lighting.toggle_light_at(*t)
+                    elif event.button == 2:
+                        self.camera_rotation.start_drag()
                     elif event.button == 3:
-                        if (self.show_grid and self.selected_tile is not None
-                                and self.placement_mode == 'object'):
-                            self.objects.remove_top_object_at(*self.selected_tile)
-                            self._sync_object_lights_at(*self.selected_tile)
+                        if self.show_grid and self.selected_tile is not None:
+                            tiles = self._get_selection_tiles()
+                            if self.placement_mode == 'object':
+                                for t in tiles:
+                                    self.objects.remove_top_object_at(*t)
+                                    self._sync_object_lights_at(*t)
+                                    if not self.objects.has_object_at(*t):
+                                        self._start_tree_regrow_timer_if_needed(*t)
+                            elif self.placement_mode == 'dig':
+                                for t in tiles:
+                                    self.digging.fill_dirt_at(*t)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 2:
+                        self.camera_rotation.stop_drag()
                 elif event.type == pygame.MOUSEMOTION:
-                    if event.buttons[2]:
-                        self.target_world_camera_x -= event.rel[0] / self.current_zoom
-                        self.target_world_camera_y -= event.rel[1] / self.current_zoom
+                    if self.camera_rotation.is_dragging():
+                        steps_before = self.camera_rotation.get_rotation_steps()
+                        self.camera_rotation.accumulate_drag(event.rel[0])
+                        if self.camera_rotation.get_rotation_steps() != steps_before:
+                            self._rotation_snapshot = self.screen.copy()
+                            self._rotation_fade = 1.0
+                    elif event.buttons[2]:
+                        rel_x = -event.rel[0] / self.current_zoom
+                        rel_y = -event.rel[1] / self.current_zoom
+                        delta_world_x, delta_world_y = self.camera_rotation.to_world_space(rel_x, rel_y)
+                        self.target_world_camera_x += delta_world_x
+                        self.target_world_camera_y += delta_world_y
                         
                         max_x = (self.world.width - 1) * self.world.tile_size
                         max_y = (self.world.height - 1) * self.world.tile_size
