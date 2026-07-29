@@ -227,6 +227,10 @@ changes needed anywhere else in the code.
 ### And more!
 ![World preview](screenshots/fire.png)
 ![World preview](screenshots/thunder.png)
+![World preview](screenshots/rot_1.png)
+![World preview](screenshots/rot_2.png)
+![World preview](screenshots/rot_3.png)
+![World preview](screenshots/rot_4.png)
 
 ## Minimum system requirements
 
