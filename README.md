@@ -1,9 +1,9 @@
 # Isometric Game Engine
 ![World preview](screenshots/IsoFED.png)
 
-A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, placeable lamps, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
+A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects, a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
 
-No external art or audio assets are required to run the project: terrain is colored procedurally, and every sound effect is synthesized at startup with NumPy. Point the sound system at your own `.wav` / `.mp3` / `.ogg` files to replace the biome ambience with real recordings whenever you're ready.
+No external art or audio assets are required to run the project: terrain is colored procedurally, fire and lightning are drawn procedurally, and every sound effect is synthesized at startup with NumPy. Point the sound/fire systems at your own `.wav` / `.mp3` / `.ogg` / `.png` files to replace any procedural fallback with real assets whenever you're ready.
 
 ---
 
@@ -40,6 +40,22 @@ No external art or audio assets are required to run the project: terrain is colo
 ![World preview](screenshots/light2.png)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
 
+### Thunderstorms
+![World preview](screenshots/thunder.png)
+- Rain has a configurable chance (default **25%**, `9`/`0` to adjust) of turning into a full thunderstorm as soon as it starts.
+- While a storm is active, lightning strikes a random tile within view every few seconds — a jagged, branching bolt is drawn from the top of the screen down to the struck tile, together with a brief screen-wide flash and a procedurally generated crack-and-rumble thunder sound.
+- Each strike is also a real, temporary light source (`get_light_boost`) that briefly brightens the ground and any nearby lamps/objects.
+- `Y` force-starts a storm right now, `U` forces an immediate strike, `9`/`0` tune the storm chance — handy for testing without waiting on the weather cycle.
+
+### Forest fires
+![World preview](screenshots/fire.png)
+- Every lightning strike that lands on a tree (in `dense_forest`) has a **5% chance** to set it ablaze.
+- A burning tree spreads to any adjacent tree (all 8 neighbors) after a random delay, and to a tile that's already at least half-caught — fire realistically races through a dense cluster of trees and crawls at the edges.
+- Each tree burns for a random amount of time before turning to ash, flickering warmly and lighting up its surroundings the whole time (procedurally animated, or drop your own `textures/fire/fire.png` / numbered `fire_1.png`, `fire_2.png`... frames to replace it).
+- Ignition plays a sound (`sound/fire/ignite.*`, or a procedurally generated crackle if you don't provide one) — but only if the tree is inside the chunk you're currently viewing, so a fire smoldering far away doesn't steal audio channels from what's actually on screen.
+- Once a tree burns out: the grass underneath goes dark and scorched for **2 minutes**, then returns to its normal color, and the tree itself only grows back after **4–5 minutes** total — it doesn't just pop back the instant the ash clears.
+- A tree won't grow on a tile that already has a placed object sitting on it, and you can't place an object or dig a hole on a tile that currently has a live tree.
+
 ### Textures
 ![World preview](screenshots/textures_2.png)
 The texture system is built on a modular principle and allows layering multiple visual effects on top of base landscape tiles. The core idea is that each biome can have:
@@ -73,15 +89,25 @@ tile places or removes an object.
 
 ### Activation
 
-The whole object-placement mechanic is only available while the grid is on:
+The whole placement mechanic (lamps, objects, and digging) is only available while the grid is on:
 
 | Key | Action |
 |---|---|
 | `G` | Show/hide the tile grid |
-| `O` | Toggle click mode: **light** ↔ **object** |
+| `O` | Cycle click mode: **light** → **object** → **dig** → back to **light** |
 
 If the grid is off, clicks on the world don't do anything (other than the
 usual camera controls).
+
+### Selecting multiple tiles
+
+Hold **Shift** while the grid is active and move the mouse — a rectangle is
+drawn from wherever the cursor was when you pressed Shift to wherever it is
+now, capped at **6 tiles on each side** (so anywhere from a 1×6 line up to a
+full 6×6 block). Every click action (placing/removing an object, toggling a
+lamp, digging/filling a hole) applies to **every tile in the selection at
+once**, not just the one tile under the cursor. Release Shift to go back to
+selecting a single tile.
 
 ### Placing objects
 
@@ -89,11 +115,14 @@ While the grid is active and the placement mode is `object`:
 
 | Action | Result |
 |---|---|
-| Left click on a tile | Place the currently selected object on top of the stack on that tile |
-| Right click on a tile | Remove the top object from the stack on that tile |
+| Left click on a tile (or selection) | Place the currently selected object on top of the stack on each tile |
+| Right click on a tile (or selection) | Remove the top object from the stack on each tile |
 | `TAB` | Cycle through the list of object types (changes the selected type) |
 | `I` | Show/hide the object picker panel on the right (see below) |
 | `F` | Mirror the object horizontally (see "Mirroring") |
+
+You can't place an object on a tile that currently has a live tree on it —
+clear the tree (or wait for fire to burn it down) first.
 
 ### Stacks (placement height)
 
@@ -113,7 +142,7 @@ While the grid is active and a tile is selected, a semi-transparent
 - shows the **exact level** the next block will be placed at (taking
   already-stacked blocks into account);
 - outlines the tile with a white border so the placement spot is
-  unambiguous;
+  unambiguous (turns red if the tile is blocked, e.g. by a tree);
 - shows nothing if the stack is already full — it's immediately clear
   there's nowhere left to place a block.
 
@@ -169,7 +198,8 @@ current scene lighting — the same way the ground and trees are:
 
 - the day/night cycle (`sun_system.py`);
 - light from placed lamps (`lighting_system.py`);
-- lightning flashes during a storm (`thunderstorm_system.py`).
+- lightning flashes during a storm (`thunderstorm_system.py`);
+- nearby burning trees (`fire_system.py`).
 
 This works through `light_fn` — a `(tile_x, tile_y) -> (r, g, b)` function
 passed into `ObjectSystem.render(...)`.
@@ -211,26 +241,48 @@ The new type will immediately show up in the picker panel (`I`), in the
 `TAB` cycle, and will fully support stacking/mirroring/lighting — no
 changes needed anywhere else in the code.
 
+### Digging & water flow
+
+- Switch the placement mode to `dig` (`O`) and left-click a tile (or a Shift
+  selection) to dig it out; right-click fills it back in. You can't dig
+  under a placed object or a live tree — remove those first.
+- A dug tile darkens, and — since the tile's lighting-adjusted color is
+  computed once and reused for the ground *and* every overlay drawn on top
+  of it — the whole hole (and anything visually layered on it) darkens
+  together as a single "empty pit" effect.
+- If a hole ends up next to `shallow_water`, water gradually flows in and
+  fills it — and behaves a little like Dwarf Fortress: a **wide pool** (part
+  of a solid 2×2-or-bigger dug block) fills a bit **slower**, while a
+  **narrow, one-tile-wide corridor or dead end** fills **much faster**, as if
+  under pressure through a single channel. A filled (or half-filled)
+  hole becomes a water source for its own neighbors, so water can chain
+  through a whole dug-out network, not just the one tile touching the pond.
+- The water in a hole reacts to lighting exactly like ordinary water — day/
+  night tint, nearby lamps, fire glow — plus a subtle ripple, instead of
+  freezing into one flat, unlit color once it's full.
+
+### Camera rotation
+![World preview](screenshots/rot_1.png)
+![World preview](screenshots/rot_2.png)
+![World preview](screenshots/rot_3.png)
+![World preview](screenshots/rot_4.png)
+- Hold the **middle mouse button** and drag left/right to spin the camera around the world.
+- Isometric diamond tiles only tile seamlessly at 0°/90°/180°/270°, so dragging accumulates motion and, once you've dragged far enough, snaps cleanly to the next 90° step (drag further/faster to jump multiple steps at once) — no in-between angle is ever actually rendered, so there are never gaps in the ground grid.
+- The snap itself is instant, but a short crossfade (the old view fading out over the new one, ~0.18s) makes the turn read as a smooth, real-time rotation instead of a hard cut.
+- Camera-relative controls (`WASD`, right-click pan) keep working the way you'd expect after rotating — "forward" is still "up the screen", not a fixed world direction.
 
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
 - Biome ambience loads from your own audio files (`sound/bioms/forest.*`, `plains.*`, `desert.*`, `water.*`, `mountains.*`, `swamp.*` — `.wav`/`.mp3`/`.ogg`, first match wins). Any biome missing a file falls back to a procedurally generated wind/water/critter texture so the game is never silent, with a clear console warning telling you exactly which file to add.
 - Weather sound (rain/snow/sandstorm) is fully procedural — filtered/modulated noise, no assets needed — and its volume tracks the current precipitation intensity.
+- One-shot sound effects (thunder, tree ignition) go through a small dedicated pool of channels (`play_one_shot`) that's always kept separate from the looping ambience/weather channels — a burst of simultaneous effects can never accidentally steal and silence a background loop.
 - Ambience and weather both fade to silence underground or while a chunk is still loading, instead of cutting abruptly.
 - Master volume with `-` / `=`.
 
 ### UI & tools
-- Live info panel (FPS, camera/chunk position, zoom, weather/sun/light/sound status, tile under cursor).
+- Live info panel (FPS, camera/chunk position, zoom, weather/sun/light/sound/fire/digging status, camera rotation, current selection size, tile under cursor).
 - Minimap with click-to-travel.
 ---
-
-### And more!
-![World preview](screenshots/fire.png)
-![World preview](screenshots/thunder.png)
-![World preview](screenshots/rot_1.png)
-![World preview](screenshots/rot_2.png)
-![World preview](screenshots/rot_3.png)
-![World preview](screenshots/rot_4.png)
 
 ## Minimum system requirements
 
@@ -264,41 +316,47 @@ The world opens in fullscreen.
 ---
 
 ## Project structure
-The engine is deliberately split into small, self-contained modules. Each one only needs `update(dt)` called once per frame and takes the shared `screen` surface (or a couple of small helper callbacks) to render — none of them know about each other directly, so any one of them can be lifted out, replaced, or reused in a different project with minimal changes.
+The engine is deliberately split into small, self-contained modules. Most only need `update(dt)` called once per frame and take the shared `screen` surface (or a couple of small helper callbacks) to render — none of them know about each other directly, so any one of them can be lifted out, replaced, or reused in a different project with minimal changes.
 ```
 .
-├── generation_wold.py      # World generation, chunk streaming, camera/rendering, input, UI
-├── weather_system.py       # Rain / snow / sandstorm particles, biome crossfade
-├── sun_system.py           # Day/night clock, ambient tint, directional shading, sun disc/rays
-├── lighting_system.py      # Placeable lamps, tile light-boost, post/bulb rendering
-├── thunderstorm_system.py  # Lightning strikes during rain, screen flash, thunder audio
-├── object_system.py        # Placeable objects (cubes, stairs), stacking, mirroring, picker UI
-├── sound_system.py         # Biome ambience (file-based) + procedural weather audio
-├── texture_manager.py      # Texture loading, caching, and overlay management
+├── generation_wold.py       # World generation, chunk streaming, camera/rendering, input, UI
+├── weather_system.py        # Rain / snow / sandstorm particles, biome crossfade
+├── sun_system.py             # Day/night clock, ambient tint, directional shading, sun disc/rays
+├── lighting_system.py       # Placeable lamps, tile light-boost, post/bulb rendering
+├── thunderstorm_system.py   # Lightning strikes during rain, screen flash, thunder audio
+├── fire_system.py            # Tree ignition, spreading, burnout, scorched-grass/regrowth timers
+├── object_system.py          # Placeable objects (cubes, stairs), stacking, mirroring, picker UI
+├── digging_system.py         # Dug-out tiles (holes), darkening, dirt fill-back-in
+├── water_flow_system.py      # Water physics flowing into holes near shallow_water
+├── camera_rotation_system.py # 90°-stepped camera rotation, drag-to-rotate
+├── sound_system.py           # Biome ambience (file-based) + procedural weather audio + SFX channel pool
+├── texture_manager.py        # Texture loading, caching, and overlay management
 ├── sound/
-│   └── bioms/               # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+│   ├── bioms/                # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+│   └── fire/                 # Drop your own ignite.wav here (optional)
 └── textures/
-    ├── bioms/               # Base biome textures (.png format)
+    ├── bioms/                # Base biome textures (.png format)
     │   ├── grassland.png
     │   ├── dense_forest.png
     │   ├── forest.png
     │   └── ...
-    ├── grass/               # Grass overlays (with transparency)
+    ├── grass/                # Grass overlays (with transparency)
     │   └── grassland.png
-    ├── trees/               # Tree overlays (with transparency)
+    ├── trees/                # Tree overlays (with transparency)
     │   └── dense_forest.png
-    ├── flowers/             # Flower sprites (with transparency)
+    ├── flowers/               # Flower sprites (with transparency)
     │   ├── flower_red.png
     │   ├── flower_blue.png
     │   └── ...
-    └── objects/             # Placeable object textures (with transparency)
-        ├── wooden_cube.png
-        ├── stone_cube.png
-        ├── water_cube.png
-        ├── lava_cube.png
-        ├── lamp_cube.png
-        ├── wooden_stairs.png
-        └── stone_stairs.png
+    ├── objects/               # Placeable object textures (with transparency)
+    │   ├── wooden_cube.png
+    │   ├── stone_cube.png
+    │   ├── water_cube.png
+    │   ├── lava_cube.png
+    │   ├── lamp_cube.png
+    │   ├── wooden_stairs.png
+    │   └── stone_stairs.png
+    └── fire/                  # Drop your own fire.png (or fire_1.png, fire_2.png, ...) here (optional)
 ```
 
 ### Module responsibilities at a glance
@@ -307,9 +365,13 @@ The engine is deliberately split into small, self-contained modules. Each one on
 | `weather_system.py` | Precipitation state machine, particle simulation, rendering | `set_area()` / `set_area_polygon()`, `set_biome_landing_points()`, `set_dominant_kind()` |
 | `sun_system.py` | Time of day, ambient tint, light direction, sun visuals | `apply_tint()`, `get_light_direction()`, `get_elevation()` |
 | `lighting_system.py` | Lamp placement & rendering | `toggle_light_at()`, `get_tile_light_boost()`, `render(..., chunk_bounds=...)` |
-| `thunderstorm_system.py` | Lightning strikes, thunder, storm state | `update(dt, weather_kind, weather_intensity, camera_tile_bounds, biome_at_fn, current_biome)`, `get_light_boost()`, `render()` |
-| `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes | `place_object_at()` / `remove_top_object_at()`, `render(..., light_fn=...)`, `render_preview()` |
-| `sound_system.py` | Ambient/weather audio playback | `set_dominant_biome()`, `set_weather()` |
+| `thunderstorm_system.py` | Lightning strikes, thunder, storm state | `update(dt, weather_kind, weather_intensity, camera_tile_bounds, biome_at_fn, current_biome)`, `get_light_boost()`, `render()`, `on_strike` callback |
+| `fire_system.py` | Tree ignition/spread/burnout, scorched-grass and regrowth timers | `try_ignite_from_lightning()`, `update(dt, tree_at_fn)`, `get_light_boost()`, `render()` |
+| `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes | `place_object_at()` / `remove_top_object_at()`, `render_at_tile(..., light_fn=...)`, `render_preview()` |
+| `digging_system.py` | Dug-tile state, darkening | `dig_at()` / `fill_dirt_at()`, `apply_darken()` |
+| `water_flow_system.py` | Water spreading into holes | `update(dt, water_neighbor_fn)`, `get_water_color()` |
+| `camera_rotation_system.py` | Camera rotation state, coordinate transform | `to_view_space()` / `to_world_space()`, `accumulate_drag()` |
+| `sound_system.py` | Ambient/weather/one-shot audio playback | `set_dominant_biome()`, `set_weather()`, `play_one_shot()`, `set_active_chunk_bounds()` |
 | `texture_manager.py` | Texture loading, caching, and overlay management | `get_diamond_texture()`, `get_grass_overlay()`, `get_tree_overlay()`, `get_flower_texture()` |
 
 `generation_wold.py` is the only module that knows about all the others; it computes the "dominant biome/weather kind" for the current camera view once per frame (with hysteresis, so the result doesn't flicker right on a biome border) and feeds it to whichever systems need it.
@@ -319,18 +381,23 @@ The engine is deliberately split into small, self-contained modules. Each one on
 ## Controls
 | Key | Action |
 |---|---|
-| `WASD` / Arrow keys | Move camera |
+| `WASD` / Arrow keys | Move camera (camera-relative — stays intuitive after rotating) |
 | `Shift` + move | Move faster |
 | Right-click drag | Pan camera |
+| Middle-click drag | Rotate camera (snaps to 90° steps, smoothed with a crossfade) |
 | Left-click (minimap) | Jump camera to that point |
 | `G` | Toggle grid — hover to highlight a tile |
-| `O` | Toggle grid-click mode: **light** ↔ **object** |
-| Left-click (grid, light mode) | Place/remove a lamp |
+| `Shift` + hover (grid) | Select a rectangle of tiles (up to 6×6) instead of just one |
+| `O` | Cycle grid-click mode: **light** → **object** → **dig** |
+| Left-click (grid, light mode) | Toggle a lamp on the selected tile(s) |
 | Left-click (grid, object mode) | Place the selected object on top of the stack |
 | Right-click (grid, object mode) | Remove the top object from the stack |
+| Left-click (grid, dig mode) | Dig a hole |
+| Right-click (grid, dig mode) | Fill the hole back in |
 | `TAB` | Cycle the selected object type |
 | `F` | Mirror the top object on the selected tile, or arm mirroring for the next placement |
 | `I` | Toggle info panel (grid off) / object picker panel (grid on) |
+| `L` | Force-ignite the selected tile (fire testing) |
 | `M` | Toggle minimap |
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
