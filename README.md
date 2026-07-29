@@ -226,6 +226,7 @@ changes needed anywhere else in the code.
 
 ### Screenshots
 ![World preview](screenshots/fire.png)
+![World preview](screenshots/thunder.png)
 
 ## Minimum system requirements
 
