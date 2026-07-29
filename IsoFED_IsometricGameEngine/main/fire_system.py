@@ -18,6 +18,12 @@ FIRE_FLICKER_AMPLITUDE = 0.3
 FIRE_FLICKER_SPEED = 6.0
 
 
+GRASS_DARK_DURATION = 120.0           
+GRASS_DARK_FADE_TIME = 12.0           
+GRASS_DARKEN_STRENGTH = 0.6            
+TREE_REGROW_DURATION_RANGE = (240.0, 300.0)   
+
+
 FIRE_TEXTURE_SEARCH_DIRS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'textures', 'fire'),
     '/textures/fire',
@@ -54,6 +60,17 @@ class BurningTree:
         return min(1.0, self.age / self.burn_duration)
 
 
+class BurntGround:
+    __slots__ = ('tile_x', 'tile_y', 'age', 'dark_duration', 'regrow_duration')
+
+    def __init__(self, tile_x, tile_y, dark_duration, regrow_duration):
+        self.tile_x = tile_x
+        self.tile_y = tile_y
+        self.age = 0.0
+        self.dark_duration = dark_duration
+        self.regrow_duration = regrow_duration
+
+
 class FireSystem:
 
     def __init__(self, seed=None,
@@ -61,6 +78,8 @@ class FireSystem:
                  spread_delay_range=SPREAD_DELAY_RANGE,
                  burn_duration_range=BURN_DURATION_RANGE,
                  spread_radius=SPREAD_RADIUS,
+                 grass_dark_duration=GRASS_DARK_DURATION,
+                 tree_regrow_range=TREE_REGROW_DURATION_RANGE,
                  sound_system=None,
                  texture_dirs=None,
                  sound_dirs=None):
@@ -69,10 +88,12 @@ class FireSystem:
         self.spread_delay_range = spread_delay_range
         self.burn_duration_range = burn_duration_range
         self.spread_radius = spread_radius
+        self.grass_dark_duration = grass_dark_duration
+        self.tree_regrow_range = tree_regrow_range
         self.sound_system = sound_system   
 
         self.fires = {}        
-        self.ash = set()        
+        self.ash = {}           # (tile_x, tile_y) -> BurntGround
         self.time = 0.0         
 
         self.texture_dirs = texture_dirs or FIRE_TEXTURE_SEARCH_DIRS
@@ -88,7 +109,6 @@ class FireSystem:
 
     # ------------------------------------------------------------------
     def set_ignite_chance(self, chance):
-        """0..1 или 0..100 (проценты)."""
         if chance > 1.0:
             chance /= 100.0
         self.ignite_chance = max(0.0, min(1.0, chance))
@@ -102,6 +122,20 @@ class FireSystem:
 
     def is_ash_at(self, tile_x, tile_y):
         return (int(tile_x), int(tile_y)) in self.ash
+
+    def is_tree_suppressed(self, tile_x, tile_y):
+        return (int(tile_x), int(tile_y)) in self.ash
+
+    def get_grass_darken(self, tile_x, tile_y):
+        entry = self.ash.get((int(tile_x), int(tile_y)))
+        if entry is None:
+            return 0.0
+        if entry.age >= entry.dark_duration:
+            return 0.0
+        remaining = entry.dark_duration - entry.age
+        if GRASS_DARK_FADE_TIME <= 0:
+            return 1.0
+        return max(0.0, min(1.0, remaining / GRASS_DARK_FADE_TIME))
 
     def count_burning(self):
         return len(self.fires)
@@ -135,7 +169,7 @@ class FireSystem:
         spread_delay = self.rng.uniform(*self.spread_delay_range)
         phase = self.rng.uniform(0, 2 * math.pi)
         self.fires[key] = BurningTree(key[0], key[1], burn_duration, spread_delay, phase)
-        self._play_ignite_sound()
+        self._play_ignite_sound(key[0], key[1])
 
     # ------------------------------------------------------------------
     def _neighbors(self, tile_x, tile_y):
@@ -147,10 +181,6 @@ class FireSystem:
                 yield (tile_x + dx, tile_y + dy)
 
     def update(self, dt, tree_at_fn):
-        if not self.fires:
-            self.time += dt
-            return
-
         self.time += dt
         finished = []
         to_ignite = []
@@ -172,11 +202,23 @@ class FireSystem:
 
         for key in finished:
             del self.fires[key]
-            self.ash.add(key)
+            dark_duration = self.grass_dark_duration
+            regrow_duration = self.rng.uniform(*self.tree_regrow_range)
+
+            regrow_duration = max(regrow_duration, dark_duration)
+            self.ash[key] = BurntGround(key[0], key[1], dark_duration, regrow_duration)
 
         for key in to_ignite:
             if key not in self.fires and key not in self.ash:
                 self._ignite(key)
+
+        regrown = []
+        for key, ground in self.ash.items():
+            ground.age += dt
+            if ground.age >= ground.regrow_duration:
+                regrown.append(key)
+        for key in regrown:
+            del self.ash[key]
 
     # ------------------------------------------------------------------
     def get_light_boost(self, world_x, world_y):
@@ -226,7 +268,6 @@ class FireSystem:
             i += 1
 
         if not frames:
-            # Одиночный кадр fire.png
             for directory in self.texture_dirs:
                 for ext in SUPPORTED_IMAGE_EXTENSIONS:
                     path = os.path.join(directory, 'fire' + ext)
@@ -287,7 +328,6 @@ class FireSystem:
         self._ignite_sound_missing = False
 
     # ------------------------------------------------------------------
-    # Звук воспламенения
     def _load_ignite_sound(self):
         if self._ignite_sound is not None:
             return self._ignite_sound
@@ -337,7 +377,10 @@ class FireSystem:
         signal = signal / (np.abs(signal).max() + 1e-6) * 0.8
         return signal.astype(np.float32)
 
-    def _play_ignite_sound(self):
+    def _play_ignite_sound(self, tile_x, tile_y):
+        if self.sound_system is not None and hasattr(self.sound_system, 'is_position_audible'):
+            if not self.sound_system.is_position_audible(tile_x, tile_y):
+                return
         if pygame.mixer.get_init() is None:
             return
 
@@ -354,8 +397,14 @@ class FireSystem:
                 print(f"Fire system: failed to generate ignite sound: {e}")
                 return
 
+        volume_mult = self.rng.uniform(0.75, 1.0)
+
+        if self.sound_system is not None and hasattr(self.sound_system, 'play_one_shot'):
+            self.sound_system.play_one_shot(sound, volume=volume_mult)
+            return
+
         volume = getattr(self.sound_system, 'master_volume', 1.0) if self.sound_system is not None else 1.0
-        volume *= self.rng.uniform(0.75, 1.0)
+        volume *= volume_mult
 
         channel = self._ignite_channel or pygame.mixer.find_channel(True)
         if channel is None:
@@ -451,6 +500,11 @@ class FireSystem:
 
     # ------------------------------------------------------------------
     def get_status_text(self):
-        if not self.fires:
+        if not self.fires and not self.ash:
             return "no fires"
-        return f"{len(self.fires)} tree(s) burning"
+        parts = []
+        if self.fires:
+            parts.append(f"{len(self.fires)} burning")
+        if self.ash:
+            parts.append(f"{len(self.ash)} recovering")
+        return ", ".join(parts)
