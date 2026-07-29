@@ -61,6 +61,9 @@ class SoundSystem:
     FADE_SPEED = 1.0 / 1.5   
     WEATHER_FADE_SPEED = 1.0 / 1.0
 
+
+    EFFECT_CHANNEL_COUNT = 8
+
     def __init__(self, master_volume=0.6, seed=0, biome_sound_dirs=None):
         self.master_volume = master_volume
         self.enabled = False
@@ -80,15 +83,29 @@ class SoundSystem:
         self.current_weather = None
         self._weather_intensity = 0.0
 
+
+        self._next_channel_index = 0
+        self._effect_channels = []
+        self._effect_channel_cursor = 0
+
+
+        self._active_chunk_bounds = None
+
         try:
             if pygame.mixer.get_init() is None:
                 pygame.mixer.init(frequency=self.SAMPLE_RATE, size=-16, channels=2)
-            pygame.mixer.set_num_channels(max(16, pygame.mixer.get_num_channels()))
+
+            pygame.mixer.set_num_channels(max(32, pygame.mixer.get_num_channels()))
             self._build_all_sounds()
             self.enabled = True
         except Exception as e:
             print(f"Sound is unavailable. ({e}) — The game will continue running without sound.")
             self.enabled = False
+
+    def _reserve_channel(self):
+        channel = pygame.mixer.Channel(self._next_channel_index)
+        self._next_channel_index += 1
+        return channel
 
 
     def _white_noise(self, seconds, seed_offset=0):
@@ -178,7 +195,7 @@ class SoundSystem:
                 signal = _make_seamless(self._fallback_biome_signal(name, dur), overlap)
                 sound = pygame.sndarray.make_sound(_to_stereo_int16(signal))
             
-            channel = pygame.mixer.find_channel(True)
+            channel = self._reserve_channel()
             channel.play(sound, loops=-1)
             channel.set_volume(0.0)
             self._biome_channels[name] = channel
@@ -193,12 +210,15 @@ class SoundSystem:
         for name, gen in weather_generators.items():
             signal = _make_seamless(gen(), overlap)
             sound = pygame.sndarray.make_sound(_to_stereo_int16(signal))
-            channel = pygame.mixer.find_channel(True)
+            channel = self._reserve_channel()
             channel.play(sound, loops=-1)
             channel.set_volume(0.0)
             self._weather_channels[name] = channel
             self._weather_volume[name] = 0.0
             self._weather_target_intensity[name] = 0.0
+
+        self._effect_channels = [self._reserve_channel() for _ in range(self.EFFECT_CHANNEL_COUNT)]
+        self._effect_channel_cursor = 0
 
 
     def set_dominant_biome(self, category):
@@ -222,6 +242,29 @@ class SoundSystem:
 
     def get_master_volume(self):
         return self.master_volume
+
+    # ------------------------------------------------------------------
+    def play_one_shot(self, sound, volume=1.0):
+        if not self.enabled or sound is None or not self._effect_channels:
+            return None
+        channel = self._effect_channels[self._effect_channel_cursor]
+        self._effect_channel_cursor = (self._effect_channel_cursor + 1) % len(self._effect_channels)
+        channel.set_volume(max(0.0, min(1.0, volume)) * self.master_volume)
+        channel.play(sound)
+        return channel
+
+    def set_active_chunk_bounds(self, chunk_bounds):
+        self._active_chunk_bounds = chunk_bounds
+
+    def get_active_chunk_bounds(self):
+        return self._active_chunk_bounds
+
+    def is_position_audible(self, tile_x, tile_y, margin=0):
+        if self._active_chunk_bounds is None:
+            return True
+        min_x, min_y, max_x, max_y = self._active_chunk_bounds
+        return (min_x - margin <= tile_x < max_x + margin and
+                min_y - margin <= tile_y < max_y + margin)
 
     def update(self, dt_seconds):
         if not self.enabled:
@@ -261,4 +304,6 @@ class SoundSystem:
         for channel in self._biome_channels.values():
             channel.stop()
         for channel in self._weather_channels.values():
+            channel.stop()
+        for channel in self._effect_channels:
             channel.stop()
