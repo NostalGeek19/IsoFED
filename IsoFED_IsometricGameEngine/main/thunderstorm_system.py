@@ -97,7 +97,7 @@ class ThunderstormSystem:
             self.storm_active = self.rng.random() < self.storm_chance
             self._time_to_next_strike = self._roll_next_interval()
             if self.debug:
-                print(f"[Thunderstorm] chance thunder ={self.storm_chance:.0%} -> "
+                print(f"[Thunderstorm] дождь начался, шанс грозы={self.storm_chance:.0%} -> "
                       f"{'thunder' if self.storm_active else 'rain'}")
 
         if not raining_now:
@@ -109,7 +109,7 @@ class ThunderstormSystem:
             self._time_to_next_strike -= dt
             if self._time_to_next_strike <= 0:
                 self._try_strike(camera_tile_bounds, biome_at_fn, current_biome)
-
+                
                 self._time_to_next_strike = self._roll_next_interval() * (1.35 - 0.5 * weather_intensity)
 
         for strike in self.strikes:
@@ -132,13 +132,12 @@ class ThunderstormSystem:
                 break
 
         if tile_x is None:
-            return 
-
+            return  
         strike = LightningStrike(tile_x, tile_y, seed=self.rng.randint(0, 1_000_000))
         self.strikes.append(strike)
         self._play_thunder()
         if self.debug:
-            print(f"[Thunderstorm]thunder ({tile_x}, {tile_y})")
+            print(f"[Thunderstorm] hit ({tile_x}, {tile_y})")
         if self.on_strike is not None:
             self.on_strike(tile_x, tile_y)
 
@@ -219,6 +218,7 @@ class ThunderstormSystem:
         pygame.draw.lines(bolt_surf, (*glow_color, int(120 * alpha)), False, points, width_glow)
         pygame.draw.lines(bolt_surf, (*core_color, int(255 * alpha)), False, points, width_core)
 
+        
         for _ in range(bolt_rng.randint(1, 3)):
             branch_start_idx = bolt_rng.randint(1, len(points) - 2)
             bx, by = points[branch_start_idx]
@@ -228,6 +228,7 @@ class ThunderstormSystem:
             by2 = by + math.sin(bang) * blen
             pygame.draw.line(bolt_surf, (*core_color, int(160 * alpha)), (bx, by), (bx2, by2), 1)
 
+        
         r = max(3, int(pixels_per_tile * 0.5))
         pygame.draw.circle(bolt_surf, (*glow_color, int(90 * alpha)), (int(target_x), int(target_y)), r)
 
@@ -241,7 +242,7 @@ class ThunderstormSystem:
 
         noise = rng.uniform(-1.0, 1.0, n).astype(np.float32)
         crack = _lowpass(noise, 3)     
-        rumble = _lowpass(noise, 45)  
+        rumble = _lowpass(noise, 45)   
 
         t = np.arange(n) / self.THUNDER_SAMPLE_RATE
         crack_env = np.exp(-t * 18.0)
@@ -265,8 +266,14 @@ class ThunderstormSystem:
             print(f"no sound: {e}")
             return
 
+        volume_mult = self.rng.uniform(0.75, 1.0)  
+
+        if self.sound_system is not None and hasattr(self.sound_system, 'play_one_shot'):
+            self.sound_system.play_one_shot(sound, volume=volume_mult)
+            return
+
         volume = getattr(self.sound_system, 'master_volume', 1.0) if self.sound_system is not None else 1.0
-        volume *= self.rng.uniform(0.75, 1.0) 
+        volume *= volume_mult
 
         channel = self._thunder_channel or pygame.mixer.find_channel(True)
         if channel is None:
