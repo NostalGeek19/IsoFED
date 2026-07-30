@@ -640,7 +640,11 @@ class DualViewRenderer:
         self.selection_anchor = None   
         self.selected_tiles = []       
         self.MAX_SELECTION_SIZE = 6    
-        self.show_info = True
+        self._drag_paint_active = False
+        self._drag_paint_last_tile = None
+        self._alt_drag_reference_height = 0
+        self.side_build_mode = False
+        self.show_info = False
         self.show_object_picker = False  
         self.show_minimap = True
         
@@ -935,15 +939,17 @@ class DualViewRenderer:
     
     def _sync_object_lights_at(self, tile_x, tile_y):
         key = (int(tile_x), int(tile_y))
-        stack = self.objects.get_stack_at(tile_x, tile_y)
+        stack = self.objects.get_stack_with_levels(tile_x, tile_y)
 
         light_obj_type = None
         light_config = None
-        for obj_type, _mirrored in reversed(stack):
+        light_level = 0
+        for level, obj_type, _mirrored in reversed(stack):
             config = self.objects.get_light_config(obj_type)
             if config is not None:
                 light_obj_type = obj_type
                 light_config = config
+                light_level = level
                 break
 
         if light_config is not None:
@@ -952,6 +958,7 @@ class DualViewRenderer:
                 color=light_config.get('color', (255, 200, 120)),
                 radius=light_config.get('radius', 4.0),
                 intensity=light_config.get('intensity', 1.0),
+                grounded=(light_level == 0),
             )
             self._object_light_tiles[key] = light_obj_type
         elif key in self._object_light_tiles:
@@ -990,11 +997,45 @@ class DualViewRenderer:
         self._tint_cache[key] = tinted
         return tinted
 
+    def _tiles_between(self, x0, y0, x1, y1):
+        x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+        points = []
+        dx = abs(x1 - x0)
+        dy = -abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
+        x, y = x0, y0
+        while True:
+            if (x, y) != (x0, y0) and (x, y) != (x1, y1):
+                points.append((x, y))
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x += sx
+            if e2 <= dx:
+                err += dx
+                y += sy
+        return points
+
+    def _is_light_path_blocked(self, light_tile, target_tile):
+        lx, ly = light_tile
+        tx, ty = target_tile
+        if lx == tx and ly == ty:
+            return False
+        for (x, y) in self._tiles_between(lx, ly, tx, ty):
+            if self.objects.has_object_at(x, y):
+                return True
+        return False
+
     def _object_light_color(self, tile_x, tile_y):
 
         color = self.sun.apply_tint((255, 255, 255))
 
-        light_r, light_g, light_b = self.lighting.get_tile_light_boost(tile_x, tile_y)
+        light_r, light_g, light_b = self.lighting.get_tile_light_boost(
+            tile_x, tile_y, occlusion_fn=self._is_light_path_blocked)
         storm_r, storm_g, storm_b = self.storm.get_light_boost(tile_x, tile_y)
         fire_r, fire_g, fire_b = self.fire.get_light_boost(tile_x, tile_y)
 
@@ -1020,6 +1061,8 @@ class DualViewRenderer:
         if (int(world_x), int(world_y)) in self._tree_regrow_timers:
             return False
         if self.objects.has_object_at(world_x, world_y):
+            return False
+        if self.digging.is_dug(world_x, world_y):
             return False
         return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
 
@@ -1186,7 +1229,8 @@ class DualViewRenderer:
             color = self.sun.apply_tint(color)
             
             
-            light_r, light_g, light_b = self.lighting.get_tile_light_boost(world_x, world_y)
+            light_r, light_g, light_b = self.lighting.get_tile_light_boost(
+                world_x, world_y, occlusion_fn=self._is_light_path_blocked, for_ground=True)
             fire_r, fire_g, fire_b = self.fire.get_light_boost(world_x, world_y)
             light_r, light_g, light_b = light_r + fire_r, light_g + fire_g, light_b + fire_b
             if light_r or light_g or light_b:
@@ -1195,6 +1239,12 @@ class DualViewRenderer:
                     min(255, int(color[1] + light_g)),
                     min(255, int(color[2] + light_b)),
                 )
+
+            if self.objects.has_object_at(world_x, world_y):
+                stack_height = self.objects.get_stack_height(world_x, world_y)
+                shadow_strength = min(0.55, 0.12 * stack_height)
+                shadow_mult = 1.0 - shadow_strength
+                color = tuple(max(0, int(c * shadow_mult)) for c in color)
 
 
             if self.digging.is_dug(world_x, world_y):
@@ -1792,7 +1842,7 @@ class DualViewRenderer:
             f"Digging: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
             f"Tree regrowth: {len(self._tree_regrow_timers)} tile(s) waiting",
             f"lights: {self.lighting.count()} (grid [G])",
-            f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror]",
+            f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror, Ctrl+drag build, Alt+drag build at height, X side-build: {'on' if self.side_build_mode else 'off'}]",
             f"Selection: {len(self._get_selection_tiles())} tile(s) [hold Shift + hover to select up to {self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
             f"visible: {self.visible_tiles_count}",
@@ -1874,6 +1924,54 @@ class DualViewRenderer:
         tile_x, tile_y = self.camera_rotation.to_world_space(vx, vy)
         return tile_x * self.world.tile_size, tile_y * self.world.tile_size
     
+    def _max_neighbor_top_level(self, tile_x, tile_y):
+        best = -1
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            h = self.objects.get_stack_height(tile_x + dx, tile_y + dy)
+            if h - 1 > best:
+                best = h - 1
+        return best
+
+    def _place_object_side_aware(self, tiles):
+        for t in tiles:
+            if self._tile_blocks_object_placement(*t):
+                continue
+            reference_level = self._max_neighbor_top_level(*t)
+            if reference_level < 0:
+                if self.objects.place_object_at(*t):
+                    self._sync_object_lights_at(*t)
+            else:
+                if self.objects.place_object_at(*t, level=reference_level):
+                    self._sync_object_lights_at(*t)
+
+    def _apply_placement_action_at(self, tiles):
+        if self.placement_mode == 'object':
+            if self.side_build_mode:
+                self._place_object_side_aware(tiles)
+            else:
+                for t in tiles:
+                    if not self._tile_blocks_object_placement(*t):
+                        self.objects.place_object_at(*t)
+                        self._sync_object_lights_at(*t)
+        elif self.placement_mode == 'dig':
+            for t in tiles:
+                if not self._tile_blocks_digging(*t):
+                    self.digging.dig_at(*t)
+        else:
+            for t in tiles:
+                self.lighting.toggle_light_at(*t)
+
+    def _apply_horizontal_build_at_height(self, tiles, reference_height):
+        if self.placement_mode != 'object' or reference_height <= 0:
+            return
+        for t in tiles:
+            if self._tile_blocks_object_placement(*t):
+                continue
+            while self.objects.get_stack_height(*t) < reference_height:
+                if not self.objects.place_object_at(*t):
+                    break  
+                self._sync_object_lights_at(*t)
+
     def select_tile_at_screen(self, screen_x, screen_y):
         world_px_x, world_px_y = self.screen_to_world(screen_x, screen_y)
         tile_x = int(world_px_x // self.world.tile_size)
@@ -1977,6 +2075,9 @@ class DualViewRenderer:
                         idx = self._placement_modes.index(self.placement_mode)
                         self.placement_mode = self._placement_modes[(idx + 1) % len(self._placement_modes)]
                         print(f"place mode: {self.placement_mode}")
+                    elif event.key == pygame.K_x:
+                        self.side_build_mode = not self.side_build_mode
+                        print(f"side build (Minecraft-style): {'on' if self.side_build_mode else 'off'}")
                     elif event.key == pygame.K_TAB:
                         if self.placement_mode == 'object':
                             self.objects.cycle_selected_type()
@@ -2029,19 +2130,18 @@ class DualViewRenderer:
                         if not clicked_picker and self.show_minimap:
                             clicked_minimap = self.handle_minimap_click(event.pos[0], event.pos[1])
                         if not clicked_picker and not clicked_minimap and self.show_grid and self.selected_tile is not None:
-                            tiles = self._get_selection_tiles()
-                            if self.placement_mode == 'object':
-                                for t in tiles:
-                                    if not self._tile_blocks_object_placement(*t):
-                                        self.objects.place_object_at(*t)
-                                        self._sync_object_lights_at(*t)
-                            elif self.placement_mode == 'dig':
-                                for t in tiles:
-                                    if not self._tile_blocks_digging(*t):
-                                        self.digging.dig_at(*t)
+                            mods = pygame.key.get_mods()
+                            if mods & pygame.KMOD_ALT:
+                                existing_height = self.objects.get_stack_height(*self.selected_tile)
+                                if self.placement_mode == 'object' and existing_height > 0:
+                                    self._alt_drag_reference_height = existing_height
+                                    self._drag_paint_active = True
+                                    self._drag_paint_last_tile = self.selected_tile
                             else:
-                                for t in tiles:
-                                    self.lighting.toggle_light_at(*t)
+                                self._apply_placement_action_at(self._get_selection_tiles())
+                                self._drag_paint_active = True
+                                self._drag_paint_last_tile = self.selected_tile
+                                self._alt_drag_reference_height = self.objects.get_stack_height(*self.selected_tile)
                     elif event.button == 2:
                         self.camera_rotation.start_drag()
                     elif event.button == 3:
@@ -2056,8 +2156,13 @@ class DualViewRenderer:
                             elif self.placement_mode == 'dig':
                                 for t in tiles:
                                     self.digging.fill_dirt_at(*t)
+                                    if not self.digging.is_dug(*t):
+                                        self._start_tree_regrow_timer_if_needed(*t)
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    if event.button == 2:
+                    if event.button == 1:
+                        self._drag_paint_active = False
+                        self._drag_paint_last_tile = None
+                    elif event.button == 2:
                         self.camera_rotation.stop_drag()
                 elif event.type == pygame.MOUSEMOTION:
                     if self.camera_rotation.is_dragging():
@@ -2086,6 +2191,17 @@ class DualViewRenderer:
                         )
                         if not over_minimap:
                             self.select_tile_at_screen(event.pos[0], event.pos[1])
+                            if (self._drag_paint_active and event.buttons[0]
+                                    and self.selected_tile is not None
+                                    and self.selected_tile != self._drag_paint_last_tile):
+                                mods = pygame.key.get_mods()
+                                if mods & pygame.KMOD_ALT:
+                                    self._drag_paint_last_tile = self.selected_tile
+                                    self._apply_horizontal_build_at_height(
+                                        self._get_selection_tiles(), self._alt_drag_reference_height)
+                                elif mods & pygame.KMOD_CTRL:
+                                    self._drag_paint_last_tile = self.selected_tile
+                                    self._apply_placement_action_at(self._get_selection_tiles())
             
             self.handle_input()
             self.weather.update(self.clock.get_time() / 1000.0)
