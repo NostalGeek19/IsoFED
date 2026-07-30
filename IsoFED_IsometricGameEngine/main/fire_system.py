@@ -120,6 +120,11 @@ class FireSystem:
     def is_burning_at(self, tile_x, tile_y):
         return (int(tile_x), int(tile_y)) in self.fires
 
+    def get_burning_tiles(self):
+        """Список (tile_x, tile_y) всех сейчас горящих деревьев — например,
+        чтобы проверить, не стоит ли рядом с огнём бомба."""
+        return list(self.fires.keys())
+
     def is_ash_at(self, tile_x, tile_y):
         return (int(tile_x), int(tile_y)) in self.ash
 
