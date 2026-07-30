@@ -11,7 +11,7 @@ SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp')
 
 _MISSING = object()
 
-MAX_STACK_HEIGHT = 4
+MAX_STACK_HEIGHT = 10
 
 
 OBJECT_TYPES = {
@@ -83,7 +83,7 @@ class ObjectSystem:
     def __init__(self, search_dirs=None, max_stack_height=MAX_STACK_HEIGHT):
         self.search_dirs = search_dirs or OBJECT_SEARCH_DIRS
         self.max_stack_height = max_stack_height
-        self.stacks = {}   # (tile_x, tile_y) -> list[(obj_type, mirrored)] 
+        self.stacks = {}   # (tile_x, tile_y) -> {level: (obj_type, mirrored)} (разреженно — не обязательно с 0 подряд)
         self.selected_type = DEFAULT_OBJECT_TYPE
         self.mirror_next = False   
 
@@ -126,19 +126,28 @@ class ObjectSystem:
         stack = self.stacks.get(key)
         if not stack:
             return None
-        obj_type, mirrored = stack[-1]
+        top_level = max(stack.keys())
+        obj_type, mirrored = stack[top_level]
         mirrored = not mirrored
-        stack[-1] = (obj_type, mirrored)
+        stack[top_level] = (obj_type, mirrored)
         return mirrored
 
     # ------------------------------------------------------------------
-    def place_object_at(self, tile_x, tile_y, obj_type=None, mirrored=None):
+    def place_object_at(self, tile_x, tile_y, obj_type=None, mirrored=None, level=None):
         key = (int(tile_x), int(tile_y))
-        stack = self.stacks.setdefault(key, [])
-        if len(stack) >= self.max_stack_height:
+        stack = self.stacks.setdefault(key, {})
+        if level is None:
+            level = (max(stack.keys()) + 1) if stack else 0
+        if level < 0 or level >= self.max_stack_height:
+            if not stack:
+                del self.stacks[key]
+            return False
+        if level in stack:
+            if not stack:
+                del self.stacks[key]
             return False
         final_mirrored = self.mirror_next if mirrored is None else bool(mirrored)
-        stack.append((obj_type or self.selected_type, final_mirrored))
+        stack[level] = (obj_type or self.selected_type, final_mirrored)
         return True
 
     def remove_top_object_at(self, tile_x, tile_y):
@@ -146,7 +155,8 @@ class ObjectSystem:
         stack = self.stacks.get(key)
         if not stack:
             return None
-        removed_type, _removed_mirrored = stack.pop()
+        top_level = max(stack.keys())
+        removed_type, _removed_mirrored = stack.pop(top_level)
         if not stack:
             del self.stacks[key]
         return removed_type
@@ -155,10 +165,18 @@ class ObjectSystem:
         return bool(self.stacks.get((int(tile_x), int(tile_y))))
 
     def get_stack_at(self, tile_x, tile_y):
-        return list(self.stacks.get((int(tile_x), int(tile_y)), []))
+        stack = self.stacks.get((int(tile_x), int(tile_y)), {})
+        return [stack[level] for level in sorted(stack.keys())]
+
+    def get_stack_with_levels(self, tile_x, tile_y):
+        stack = self.stacks.get((int(tile_x), int(tile_y)), {})
+        return [(level, *stack[level]) for level in sorted(stack.keys())]
 
     def get_stack_height(self, tile_x, tile_y):
-        return len(self.stacks.get((int(tile_x), int(tile_y)), []))
+        stack = self.stacks.get((int(tile_x), int(tile_y)))
+        if not stack:
+            return 0
+        return max(stack.keys()) + 1
 
     def is_stack_full(self, tile_x, tile_y):
         return self.get_stack_height(tile_x, tile_y) >= self.max_stack_height
@@ -169,7 +187,7 @@ class ObjectSystem:
     def get_objects(self):
         result = []
         for (tile_x, tile_y), stack in self.stacks.items():
-            for level, (obj_type, mirrored) in enumerate(stack):
+            for level, (obj_type, mirrored) in stack.items():
                 result.append(PlacedObject(tile_x, tile_y, obj_type, level, mirrored))
         return result
 
@@ -349,7 +367,8 @@ class ObjectSystem:
 
         light_color = light_fn(tile_x, tile_y) if light_fn is not None else None
 
-        for level, (obj_type, mirrored) in enumerate(stack):
+        for level in sorted(stack.keys()):
+            obj_type, mirrored = stack[level]
             self._draw_object(screen, obj_type, level, mirrored, screen_x, screen_y,
                                pixels_per_tile, half_tile, quarter_tile, light_color)
 
