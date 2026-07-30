@@ -60,6 +60,12 @@ OBJECT_TYPES = {
         'width_scale': 1.0,
         'level_height_scale': 0.5,
     },
+    'bomb': {
+        'label': 'Bomb',
+        'texture': 'bomb',
+        'width_scale': 0.85,
+        'level_height_scale': 0.5,
+    },
     # Mirroring (for stairs and similar non-symmetrical objects)
     
 }
@@ -83,7 +89,7 @@ class ObjectSystem:
     def __init__(self, search_dirs=None, max_stack_height=MAX_STACK_HEIGHT):
         self.search_dirs = search_dirs or OBJECT_SEARCH_DIRS
         self.max_stack_height = max_stack_height
-        self.stacks = {}   # (tile_x, tile_y) -> {level: (obj_type, mirrored)} (разреженно — не обязательно с 0 подряд)
+        self.stacks = {}   # (tile_x, tile_y) -> {level: (obj_type, mirrored)}
         self.selected_type = DEFAULT_OBJECT_TYPE
         self.mirror_next = False   
 
@@ -161,6 +167,9 @@ class ObjectSystem:
             del self.stacks[key]
         return removed_type
 
+    def remove_all_at(self, tile_x, tile_y):
+        return self.stacks.pop((int(tile_x), int(tile_y)), None) is not None
+
     def has_object_at(self, tile_x, tile_y):
         return bool(self.stacks.get((int(tile_x), int(tile_y))))
 
@@ -171,6 +180,13 @@ class ObjectSystem:
     def get_stack_with_levels(self, tile_x, tile_y):
         stack = self.stacks.get((int(tile_x), int(tile_y)), {})
         return [(level, *stack[level]) for level in sorted(stack.keys())]
+
+    def get_top_object_type(self, tile_x, tile_y):
+        stack = self.stacks.get((int(tile_x), int(tile_y)))
+        if not stack:
+            return None
+        top_level = max(stack.keys())
+        return stack[top_level][0]
 
     def get_stack_height(self, tile_x, tile_y):
         stack = self.stacks.get((int(tile_x), int(tile_y)))
