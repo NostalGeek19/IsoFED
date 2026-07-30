@@ -3,14 +3,15 @@ import pygame
 
 
 class Light:
-    __slots__ = ('tile_x', 'tile_y', 'color', 'radius', 'intensity')
+    __slots__ = ('tile_x', 'tile_y', 'color', 'radius', 'intensity', 'grounded')
 
-    def __init__(self, tile_x, tile_y, color=(255, 180, 90), radius=3.5, intensity=1.0):
+    def __init__(self, tile_x, tile_y, color=(255, 180, 90), radius=3.5, intensity=1.0, grounded=True):
         self.tile_x = tile_x
         self.tile_y = tile_y
         self.color = color          
         self.radius = radius        
         self.intensity = intensity  
+        self.grounded = grounded
 
 
 class LightingSystem:
@@ -38,7 +39,7 @@ class LightingSystem:
     def count(self):
         return len(self.lights)
 
-    def get_tile_light_boost(self, world_x, world_y):
+    def get_tile_light_boost(self, world_x, world_y, occlusion_fn=None, for_ground=False):
         if not self.lights:
             return (0, 0, 0)
 
@@ -48,6 +49,12 @@ class LightingSystem:
             dy = world_y - light.tile_y
             dist = math.sqrt(dx * dx + dy * dy)
             if dist >= light.radius:
+                continue
+
+            if for_ground and dist == 0 and not light.grounded:
+                continue
+
+            if occlusion_fn is not None and occlusion_fn((light.tile_x, light.tile_y), (world_x, world_y)):
                 continue
 
             falloff = (1.0 - dist / light.radius) ** 2
