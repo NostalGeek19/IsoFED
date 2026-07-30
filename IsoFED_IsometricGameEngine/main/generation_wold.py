@@ -18,6 +18,7 @@ from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
                            WEATHER_RAIN, WEATHER_SNOW, WEATHER_SAND)
 from thunderstorm_system import ThunderstormSystem
 from fire_system import FireSystem
+from explosion_system import ExplosionSystem
 from digging_system import DiggingSystem
 from water_flow_system import WaterFlowSystem
 from object_system import ObjectSystem
@@ -685,6 +686,18 @@ class DualViewRenderer:
         # trees after a delay.
         self.fire = FireSystem(sound_system=self.sound)
 
+        # Bomb detonation — separate module, explosion_system.py. Hover a
+        # placed 'bomb' object and press E to detonate it.
+        self.explosions = ExplosionSystem(sound_system=self.sound,
+                                           find_bombs_fn=self._find_bombs_within,
+                                           remove_bomb_fn=self._remove_bomb_at,
+                                           destroy_objects_fn=self._destroy_objects_within)
+
+        # Бомба, оказавшаяся в радиусе 1 тайла от огня, детонирует сама,
+        # через случайные 4-5 секунд ("запал") — см. _update_bomb_fuses.
+        self._bomb_fuse_timers = {}   # (tile_x, tile_y) -> оставшееся время, сек
+        self.BOMB_FUSE_DELAY_RANGE = (4.0, 5.0)
+
         # Thunderstorm mechanic (lightning during rain)
         self.storm = ThunderstormSystem(self.lighting, self.sound, storm_chance=0.25, debug=True,
                                          on_strike=self._on_lightning_strike)
@@ -937,6 +950,70 @@ class DualViewRenderer:
         index = min(index, len(variants) - 1)
         return variants[index]
     
+    def _find_bombs_within(self, center_x, center_y, radius):
+        r_int = int(math.ceil(radius))
+        result = []
+        for dx in range(-r_int, r_int + 1):
+            for dy in range(-r_int, r_int + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                if math.sqrt(dx * dx + dy * dy) > radius:
+                    continue
+                tx, ty = center_x + dx, center_y + dy
+                if self.objects.get_top_object_type(tx, ty) == 'bomb':
+                    result.append((tx, ty))
+        return result
+
+    def _remove_bomb_at(self, tile_x, tile_y):
+        self.objects.remove_top_object_at(tile_x, tile_y)
+        self._sync_object_lights_at(tile_x, tile_y)
+
+    def _update_bomb_fuses(self, dt):
+        for (fx, fy) in self.fire.get_burning_tiles():
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    key = (fx + dx, fy + dy)
+                    if key in self._bomb_fuse_timers:
+                        continue
+                    if self.objects.get_top_object_type(key[0], key[1]) == 'bomb':
+                        self._bomb_fuse_timers[key] = random.uniform(*self.BOMB_FUSE_DELAY_RANGE)
+
+        if not self._bomb_fuse_timers:
+            return
+
+        expired = []
+        for key, remaining in self._bomb_fuse_timers.items():
+            remaining -= dt
+            if remaining <= 0:
+                expired.append(key)
+            else:
+                self._bomb_fuse_timers[key] = remaining
+
+        for key in expired:
+            del self._bomb_fuse_timers[key]
+            if self.objects.get_top_object_type(key[0], key[1]) == 'bomb':
+                self._remove_bomb_at(*key)
+                self.explosions.detonate(*key)
+
+    def _destroy_objects_within(self, center_x, center_y, radius):
+        r_int = int(math.ceil(radius))
+        for dx in range(-r_int, r_int + 1):
+            for dy in range(-r_int, r_int + 1):
+                if math.sqrt(dx * dx + dy * dy) > radius:
+                    continue
+                tx, ty = center_x + dx, center_y + dy
+
+                if self.objects.has_object_at(tx, ty) and self.objects.get_top_object_type(tx, ty) != 'bomb':
+                    self.objects.remove_all_at(tx, ty)
+                    self._sync_object_lights_at(tx, ty)
+                    if not self.objects.has_object_at(tx, ty):
+                        self._start_tree_regrow_timer_if_needed(tx, ty)
+
+                if self._tile_has_tree(tx, ty):
+                    self._start_tree_regrow_timer_if_needed(tx, ty)
+
     def _sync_object_lights_at(self, tile_x, tile_y):
         key = (int(tile_x), int(tile_y))
         stack = self.objects.get_stack_with_levels(tile_x, tile_y)
@@ -1066,6 +1143,37 @@ class DualViewRenderer:
             return False
         return self._deterministic_fraction(world_x, world_y, salt=5) < self.tree_density
 
+    def _tile_is_water(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return False
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        biome_name = self._biome_id_to_name.get(tile_type)
+        return biome_name in ('deep_ocean', 'ocean', 'shallow_water')
+
+    def _tile_is_ocean(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk_x, chunk_y = tile_x // size, tile_y // size
+        local_x, local_y = tile_x % size, tile_y % size
+
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return False
+
+        tile_type = int(chunk['tile_map'][local_x, local_y])
+        biome_name = self._biome_id_to_name.get(tile_type)
+        return biome_name in ('deep_ocean', 'ocean')
+
+    def _tile_blocks_new_object_placement(self, tile_x, tile_y):
+        return self._tile_blocks_object_placement(tile_x, tile_y) or self._tile_is_ocean(tile_x, tile_y)
+
     def _tile_blocks_object_placement(self, tile_x, tile_y):
         size = self.world.chunk_size
         tile_x, tile_y = int(tile_x), int(tile_y)
@@ -1084,6 +1192,8 @@ class DualViewRenderer:
         if self.objects.has_object_at(tile_x, tile_y):
             return True
         if self._tile_blocks_object_placement(tile_x, tile_y):
+            return True
+        if self._tile_is_water(tile_x, tile_y):
             return True
         return False
 
@@ -1652,17 +1762,23 @@ class DualViewRenderer:
             )
             self.sound.set_active_chunk_bounds(chunk_bounds)
             self.lighting.render(self.screen, self.world_to_screen, pixels_per_tile, chunk_bounds=chunk_bounds)
+            self.explosions.render(self.screen, self.world_to_screen, pixels_per_tile, chunk_bounds=chunk_bounds)
 
             if (self.show_grid and self.placement_mode == 'object'
                     and self.selected_tile is not None):
                 for tile in self._get_selection_tiles():
-                    blocked = self._tile_blocks_object_placement(*tile)
+                    if self.side_build_mode and self._max_neighbor_top_level(*tile) >= 0:
+                        blocked = self._tile_blocks_object_placement(*tile)
+                    else:
+                        blocked = self._tile_blocks_new_object_placement(*tile)
                     self.objects.render_preview(self.screen, self.world_to_screen,
                                                  pixels_per_tile, *tile, blocked=blocked)
 
             self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
             self.water_flow.update(self.clock.get_time() / 1000.0, water_neighbor_fn=self._tile_is_shallow_water)
             self._update_tree_regrow_timers(self.clock.get_time() / 1000.0)
+            self.explosions.update(self.clock.get_time() / 1000.0)
+            self._update_bomb_fuses(self.clock.get_time() / 1000.0)
         
 
         if self.current_layer == 0:
@@ -1839,6 +1955,7 @@ class DualViewRenderer:
             f"Camera rotation: {self.camera_rotation.get_status_text()} [hold middle mouse + move to rotate]",
             f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
             f"Fire: {self.fire.get_status_text()} [L ignite selected tile]",
+            f"Explosions: {self.explosions.get_status_text()} [E detonate bomb under cursor]",
             f"Digging: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
             f"Tree regrowth: {len(self._tree_regrow_timers)} tile(s) waiting",
             f"lights: {self.lighting.count()} (grid [G])",
@@ -1926,23 +2043,39 @@ class DualViewRenderer:
     
     def _max_neighbor_top_level(self, tile_x, tile_y):
         best = -1
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            h = self.objects.get_stack_height(tile_x + dx, tile_y + dy)
-            if h - 1 > best:
-                best = h - 1
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                h = self.objects.get_stack_height(tile_x + dx, tile_y + dy)
+                if h - 1 > best:
+                    best = h - 1
         return best
 
     def _place_object_side_aware(self, tiles):
-        for t in tiles:
-            if self._tile_blocks_object_placement(*t):
-                continue
-            reference_level = self._max_neighbor_top_level(*t)
-            if reference_level < 0:
-                if self.objects.place_object_at(*t):
-                    self._sync_object_lights_at(*t)
-            else:
+        remaining = list(tiles)
+        for _ in range(len(remaining) + 1):
+            progressed = False
+            still_remaining = []
+            for t in remaining:
+                reference_level = self._max_neighbor_top_level(*t)
+                if reference_level < 0:
+                    still_remaining.append(t)
+                    continue
+                if self._tile_blocks_object_placement(*t):
+                    continue
                 if self.objects.place_object_at(*t, level=reference_level):
                     self._sync_object_lights_at(*t)
+                    progressed = True
+            remaining = still_remaining
+            if not progressed:
+                break
+
+        for t in remaining:
+            if self._tile_blocks_new_object_placement(*t):
+                continue
+            if self.objects.place_object_at(*t):
+                self._sync_object_lights_at(*t)
 
     def _apply_placement_action_at(self, tiles):
         if self.placement_mode == 'object':
@@ -1950,7 +2083,7 @@ class DualViewRenderer:
                 self._place_object_side_aware(tiles)
             else:
                 for t in tiles:
-                    if not self._tile_blocks_object_placement(*t):
+                    if not self._tile_blocks_new_object_placement(*t):
                         self.objects.place_object_at(*t)
                         self._sync_object_lights_at(*t)
         elif self.placement_mode == 'dig':
@@ -1965,7 +2098,7 @@ class DualViewRenderer:
         if self.placement_mode != 'object' or reference_height <= 0:
             return
         for t in tiles:
-            if self._tile_blocks_object_placement(*t):
+            if self._tile_blocks_new_object_placement(*t):
                 continue
             while self.objects.get_stack_height(*t) < reference_height:
                 if not self.objects.place_object_at(*t):
@@ -2064,7 +2197,13 @@ class DualViewRenderer:
                         self.show_grid = not self.show_grid
                     elif event.key == pygame.K_l:
                         if self.show_grid and self.selected_tile is not None:
-                            self.fire.ignite(*self.selected_tile)
+                            if not self._tile_is_water(*self.selected_tile):
+                                self.fire.ignite(*self.selected_tile)
+                    elif event.key == pygame.K_e:
+                        if self.show_grid and self.selected_tile is not None:
+                            if self.objects.get_top_object_type(*self.selected_tile) == 'bomb':
+                                self._remove_bomb_at(*self.selected_tile)
+                                self.explosions.detonate(*self.selected_tile)
                     elif event.key == pygame.K_f:
                         if self.show_grid and self.placement_mode == 'object':
                             if self.selected_tile is not None and self.objects.has_object_at(*self.selected_tile):
@@ -2190,18 +2329,26 @@ class DualViewRenderer:
                             self.minimap_y <= event.pos[1] <= self.minimap_y + self.minimap_size
                         )
                         if not over_minimap:
+                            prev_tile = self._drag_paint_last_tile
                             self.select_tile_at_screen(event.pos[0], event.pos[1])
                             if (self._drag_paint_active and event.buttons[0]
                                     and self.selected_tile is not None
-                                    and self.selected_tile != self._drag_paint_last_tile):
+                                    and self.selected_tile != prev_tile):
                                 mods = pygame.key.get_mods()
+                                if self.selected_tiles:
+                                    drag_tiles = self._get_selection_tiles()
+                                elif prev_tile is not None:
+                                    drag_tiles = self._tiles_between(*prev_tile, *self.selected_tile)
+                                    drag_tiles.append(self.selected_tile)
+                                else:
+                                    drag_tiles = [self.selected_tile]
+
+                                self._drag_paint_last_tile = self.selected_tile
                                 if mods & pygame.KMOD_ALT:
-                                    self._drag_paint_last_tile = self.selected_tile
                                     self._apply_horizontal_build_at_height(
-                                        self._get_selection_tiles(), self._alt_drag_reference_height)
+                                        drag_tiles, self._alt_drag_reference_height)
                                 elif mods & pygame.KMOD_CTRL:
-                                    self._drag_paint_last_tile = self.selected_tile
-                                    self._apply_placement_action_at(self._get_selection_tiles())
+                                    self._apply_placement_action_at(drag_tiles)
             
             self.handle_input()
             self.weather.update(self.clock.get_time() / 1000.0)
