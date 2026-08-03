@@ -66,6 +66,21 @@ OBJECT_TYPES = {
         'width_scale': 0.85,
         'level_height_scale': 0.5,
     },
+    'rail': {
+        'label': 'Rail',
+        'texture': 'rail',
+        'width_scale': 1.0,
+        'level_height_scale': 0.1,
+        'no_stack': True,  
+
+    },
+    'cart': {
+        'label': 'Cart',
+        'texture': 'cart',
+        'width_scale': 0.9,
+        'level_height_scale': 0.15,
+        'no_stack': True,  
+    },
     # Mirroring (for stairs and similar non-symmetrical objects)
     
 }
@@ -275,21 +290,31 @@ class ObjectSystem:
         if not mirrored:
             return base
 
-        key = (obj_type, width_px, 'mirrored')
+        mirror_mode = OBJECT_TYPES.get(obj_type, {}).get('mirror_mode', 'flip')
+        key = (obj_type, width_px, 'mirrored', mirror_mode)
         cached = self._scaled_cache.get(key)
         if cached is not None:
             return cached
 
-        flipped = pygame.transform.flip(base, True, False)
+        if mirror_mode == 'rotate90':
+            raw_w, raw_h = base.get_size()
+            rotated = pygame.transform.rotate(base, 90)
+            transformed = pygame.transform.smoothscale(rotated, (raw_w, raw_h))
+        else:
+            transformed = pygame.transform.flip(base, True, False)
+
         if len(self._scaled_cache) > 300:
             self._scaled_cache.clear()
-        self._scaled_cache[key] = flipped
-        return flipped
+        self._scaled_cache[key] = transformed
+        return transformed
 
-    def _get_tinted(self, obj_type, width_px, mirrored, sprite, color):
+    def is_no_stack_type(self, obj_type):
+        return bool(OBJECT_TYPES.get(obj_type, {}).get('no_stack', False))
+
+    def _get_tinted(self, obj_type, width_px, mirrored, sprite, color, degrees=0):
 
         qcolor = (color[0] & ~7, color[1] & ~7, color[2] & ~7)
-        key = (obj_type, width_px, mirrored, qcolor)
+        key = (obj_type, width_px, mirrored, degrees, qcolor)
         cached = self._tint_cache.get(key)
         if cached is not None:
             return cached
@@ -320,7 +345,7 @@ class ObjectSystem:
         self._tint_cache.clear()
 
     def _draw_object(self, screen, obj_type, level, mirrored, screen_x, screen_y,
-                      pixels_per_tile, half_tile, quarter_tile, light_color=None):
+                      pixels_per_tile, half_tile, quarter_tile, light_color=None, rotation_fn=None):
         type_info = OBJECT_TYPES.get(obj_type, {})
         width_scale = type_info.get('width_scale', 1.0)
         level_height_scale = type_info.get('level_height_scale', 0.5)
@@ -328,18 +353,21 @@ class ObjectSystem:
         level_offset = level * pixels_per_tile * level_height_scale
         base_y = screen_y + quarter_tile - level_offset
 
-        sprite = self._get_oriented(obj_type, width_px, mirrored)
+        extra_flip = bool(rotation_fn(obj_type, mirrored)) if rotation_fn is not None else False
+        effective_mirrored = mirrored != extra_flip
+
+        sprite = self._get_oriented(obj_type, width_px, effective_mirrored)
         if sprite is not None:
             if light_color is not None:
-                sprite = self._get_tinted(obj_type, width_px, mirrored, sprite, light_color)
+                sprite = self._get_tinted(obj_type, width_px, effective_mirrored, sprite, light_color)
             rect = sprite.get_rect(midbottom=(screen_x, base_y))
             screen.blit(sprite, rect)
         else:
             self._draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile,
-                                         light_color, mirrored=mirrored)
+                                         light_color, mirrored=effective_mirrored)
 
     # ------------------------------------------------------------------
-    def render(self, screen, world_to_screen_fn, pixels_per_tile, chunk_bounds=None, light_fn=None):
+    def render(self, screen, world_to_screen_fn, pixels_per_tile, chunk_bounds=None, light_fn=None, rotation_fn=None):
         if not self.stacks:
             return
 
@@ -364,9 +392,9 @@ class ObjectSystem:
 
             light_color = light_fn(obj.tile_x, obj.tile_y) if light_fn is not None else None
             self._draw_object(screen, obj.obj_type, obj.level, obj.mirrored, screen_x, screen_y,
-                               pixels_per_tile, half_tile, quarter_tile, light_color)
+                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn)
 
-    def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None):
+    def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None, rotation_fn=None):
         key = (int(tile_x), int(tile_y))
         stack = self.stacks.get(key)
         if not stack:
@@ -386,7 +414,7 @@ class ObjectSystem:
         for level in sorted(stack.keys()):
             obj_type, mirrored = stack[level]
             self._draw_object(screen, obj_type, level, mirrored, screen_x, screen_y,
-                               pixels_per_tile, half_tile, quarter_tile, light_color)
+                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn)
 
     @staticmethod
     def _draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile, light_color=None, mirrored=False):
@@ -431,7 +459,7 @@ class ObjectSystem:
         pygame.draw.polygon(screen, color_top, top_points)
         pygame.draw.polygon(screen, (60, 45, 30), top_points, 1)
 
-    def render_preview(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, alpha=140, blocked=False):
+    def render_preview(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, alpha=140, blocked=False, rotation_fn=None):
         if self.is_stack_full(tile_x, tile_y):
             return
 
@@ -462,7 +490,11 @@ class ObjectSystem:
         level_offset = level * pixels_per_tile * level_height_scale
         base_y = screen_y + quarter_tile - level_offset
 
-        sprite = self._get_oriented(obj_type, width_px, mirrored)
+        extra_flip = bool(rotation_fn(obj_type, mirrored)) if rotation_fn is not None else False
+        effective_mirrored = mirrored != extra_flip
+
+        sprite = self._get_oriented(obj_type, width_px, effective_mirrored)
+
         if sprite is not None:
             preview = sprite.copy()
             preview.set_alpha(alpha)
@@ -470,7 +502,7 @@ class ObjectSystem:
             screen.blit(preview, rect)
         else:
             ghost = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-            self._draw_placeholder_cube(ghost, screen_x, base_y, half_tile, quarter_tile, mirrored=mirrored)
+            self._draw_placeholder_cube(ghost, screen_x, base_y, half_tile, quarter_tile, mirrored=effective_mirrored)
             ghost.set_alpha(alpha)
             screen.blit(ghost, (0, 0))
 
