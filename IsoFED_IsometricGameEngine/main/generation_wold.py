@@ -19,6 +19,8 @@ from sound_system import (SoundSystem, BIOME_FOREST, BIOME_PLAINS,
 from thunderstorm_system import ThunderstormSystem
 from fire_system import FireSystem
 from explosion_system import ExplosionSystem
+from rails_system import (RailsSystem, can_place_rail, can_place_cart,
+                          get_rail_mirrored_at, needs_camera_flip)
 from digging_system import DiggingSystem
 from water_flow_system import WaterFlowSystem
 from object_system import ObjectSystem
@@ -693,9 +695,10 @@ class DualViewRenderer:
                                            remove_bomb_fn=self._remove_bomb_at,
                                            destroy_objects_fn=self._destroy_objects_within)
 
-        # Бомба, оказавшаяся в радиусе 1 тайла от огня, детонирует сама,
-        # через случайные 4-5 секунд ("запал") — см. _update_bomb_fuses.
-        self._bomb_fuse_timers = {}   # (tile_x, tile_y) -> оставшееся время, сек
+        self.rails = RailsSystem()
+
+
+        self._bomb_fuse_timers = {}   # (tile_x, tile_y) 
         self.BOMB_FUSE_DELAY_RANGE = (4.0, 5.0)
 
         # Thunderstorm mechanic (lightning during rain)
@@ -827,14 +830,15 @@ class DualViewRenderer:
         
         move_x = move_y = 0
         
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            move_x = -speed
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            move_x = speed
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            move_y = -speed
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            move_y = speed
+        if not self.rails.is_locked():
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                move_x = -speed
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                move_x = speed
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                move_y = -speed
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                move_y = speed
         
         delta_world_x, delta_world_y = self.camera_rotation.to_world_space(move_x, move_y)
 
@@ -1197,6 +1201,18 @@ class DualViewRenderer:
             return True
         return False
 
+    def _tile_blocks_rail_placement(self, tile_x, tile_y):
+        if self._tile_blocks_object_placement(tile_x, tile_y):
+            return True
+        if self._tile_is_water(tile_x, tile_y):
+            return True
+        if self.digging.is_dug(tile_x, tile_y):
+            return True
+        return False
+
+    def _rail_rotation_fn(self, obj_type, mirrored):
+        return needs_camera_flip(obj_type, self.camera_rotation.get_rotation_steps())
+
     def _start_tree_regrow_timer_if_needed(self, tile_x, tile_y):
         size = self.world.chunk_size
         tile_x, tile_y = int(tile_x), int(tile_y)
@@ -1355,6 +1371,8 @@ class DualViewRenderer:
                 shadow_strength = min(0.55, 0.12 * stack_height)
                 shadow_mult = 1.0 - shadow_strength
                 color = tuple(max(0, int(c * shadow_mult)) for c in color)
+
+            color = self.explosions.apply_darken(world_x, world_y, color)
 
 
             if self.digging.is_dug(world_x, world_y):
@@ -1747,7 +1765,8 @@ class DualViewRenderer:
                 world_x = tile_chunk_x * size + x
                 world_y = tile_chunk_y * size + y
                 self.objects.render_at_tile(self.screen, self.world_to_screen, pixels_per_tile,
-                                             world_x, world_y, light_fn=self._object_light_color)
+                                             world_x, world_y, light_fn=self._object_light_color,
+                                             rotation_fn=self._rail_rotation_fn)
                 if self.fire.is_burning_at(world_x, world_y):
                     self.fire.render(self.screen, self.world_to_screen, pixels_per_tile,
                                       chunk_bounds=(world_x, world_y, world_x + 1, world_y + 1))
@@ -1766,19 +1785,33 @@ class DualViewRenderer:
 
             if (self.show_grid and self.placement_mode == 'object'
                     and self.selected_tile is not None):
+                selected_type = self.objects.get_selected_type()
                 for tile in self._get_selection_tiles():
-                    if self.side_build_mode and self._max_neighbor_top_level(*tile) >= 0:
+                    if selected_type == 'rail':
+                        blocked = not can_place_rail(self.objects, tile[0], tile[1],
+                                                      self._tile_blocks_rail_placement)
+                    elif selected_type == 'cart':
+                        blocked = not can_place_cart(self.objects, tile[0], tile[1])
+                    elif self.side_build_mode and self._max_neighbor_top_level(*tile) >= 0:
                         blocked = self._tile_blocks_object_placement(*tile)
                     else:
                         blocked = self._tile_blocks_new_object_placement(*tile)
                     self.objects.render_preview(self.screen, self.world_to_screen,
-                                                 pixels_per_tile, *tile, blocked=blocked)
+                                                 pixels_per_tile, *tile, blocked=blocked,
+                                                 rotation_fn=self._rail_rotation_fn)
 
             self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
             self.water_flow.update(self.clock.get_time() / 1000.0, water_neighbor_fn=self._tile_is_shallow_water)
             self._update_tree_regrow_timers(self.clock.get_time() / 1000.0)
             self.explosions.update(self.clock.get_time() / 1000.0)
             self._update_bomb_fuses(self.clock.get_time() / 1000.0)
+            self.rails.update(self.clock.get_time() / 1000.0, self.objects)
+            if self.rails.is_locked():
+                cam_tile_x, cam_tile_y = self.rails.get_camera_target_tile()
+                self.target_world_camera_x = cam_tile_x * self.world.tile_size
+                self.target_world_camera_y = cam_tile_y * self.world.tile_size
+                self.world_camera_x = self.target_world_camera_x
+                self.world_camera_y = self.target_world_camera_y
         
 
         if self.current_layer == 0:
@@ -1935,7 +1968,7 @@ class DualViewRenderer:
         camera_tile_x = self.world_camera_x / self.world.tile_size
         camera_tile_y = self.world_camera_y / self.world.tile_size
         
-        zoom_text = f"ZOOM: {self.current_zoom:.2f}x"
+        #zoom_text = f"zoom: {self.current_zoom:.2f}x"
         
         chunk_count = len(self.world.loader.loaded)
         total_chunks = self.world.num_chunks_x * self.world.num_chunks_y
@@ -1943,26 +1976,27 @@ class DualViewRenderer:
         info_lines = [
             f"FPS: {fps}",
             f"click [I] hide info",
-            f"camera: ({int(self.world_camera_x)}, {int(self.world_camera_y)})",
-            f"camera: ({camera_tile_x:.1f}, {camera_tile_y:.1f})",
-            f"chunk: ({self.current_chunk_x}, {self.current_chunk_y})",
-            f"chunk_loaded: {chunk_count}/{total_chunks} chunks",
-            zoom_text,
-            f"Grid: {'ON' if self.show_grid else 'OFF'} [G]",
+            f"cam.: ({int(self.world_camera_x)}, {int(self.world_camera_y)})",
+            f"cam.: ({camera_tile_x:.1f}, {camera_tile_y:.1f})",
+            f"ck.: ({self.current_chunk_x}, {self.current_chunk_y})",
+            f"ckl.: {chunk_count}/{total_chunks} cks.",
+            #zoom_text,
+            f"Gd.: {'ON' if self.show_grid else 'OFF'} [G]",
             f"Map: {'ON' if self.show_minimap else 'OFF'} [M]",
-            f"Weather: {self.weather.get_status_text()}density: {int(self.weather.get_density()*100)}%",
-            f"Sun: {self.sun.get_status_text()} [T pause, ,/. time]",
-            f"Camera rotation: {self.camera_rotation.get_status_text()} [hold middle mouse + move to rotate]",
-            f"Storm: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
+            f"Wea.: {self.weather.get_status_text()}dens.: {int(self.weather.get_density()*100)}%",
+            f"T: {self.sun.get_status_text()} [T pause, ,/. time]",
+            f"Cam. rot.: {self.camera_rotation.get_status_text()} [hold middle mouse + move to rotate]",
+            f"Stm.: {self.storm.get_status_text() or 'off'} chance {self.storm.get_storm_chance():.0%} [9/0, Y force, U strike]",
             f"Fire: {self.fire.get_status_text()} [L ignite selected tile]",
-            f"Explosions: {self.explosions.get_status_text()} [E detonate bomb under cursor]",
-            f"Digging: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
-            f"Tree regrowth: {len(self._tree_regrow_timers)} tile(s) waiting",
-            f"lights: {self.lighting.count()} (grid [G])",
-            f"Objects: {self.objects.get_status_text()} [O placement: {self.placement_mode}, TAB cycle, I picker, F mirror, Ctrl+drag build, Alt+drag build at height, X side-build: {'on' if self.side_build_mode else 'off'}]",
-            f"Selection: {len(self._get_selection_tiles())} tile(s) [hold Shift + hover to select up to {self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
+            f"Expl.: {self.explosions.get_status_text()} [E detonate bomb under cursor]",
+            f"Rail.: {'riding cart' if self.rails.is_locked() else 'not riding'} [E lock/unlock cart, W/S direction]",
+            f"Dig.: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
+            f"Tree: {len(self._tree_regrow_timers)} tile(s) waiting",
+            f"l: {self.lighting.count()} (grid [G])",
+            f"Obj.: {self.objects.get_status_text()} [O placement: {self.placement_mode}, {'on' if self.side_build_mode else 'off'}]",
+            f"Sel.: {len(self._get_selection_tiles())} {self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
-            f"visible: {self.visible_tiles_count}",
+            f"vis.: {self.visible_tiles_count}",
             f"({visible_percent:.1f}%)",
 
         ]
@@ -2079,7 +2113,25 @@ class DualViewRenderer:
 
     def _apply_placement_action_at(self, tiles):
         if self.placement_mode == 'object':
-            if self.side_build_mode:
+            selected_type = self.objects.get_selected_type()
+            if selected_type == 'rail':
+                for t in tiles:
+                    if can_place_rail(self.objects, t[0], t[1], self._tile_blocks_rail_placement):
+                        self.objects.place_object_at(*t, obj_type='rail')
+                        self._sync_object_lights_at(*t)
+                    else:
+                        print(f"[Rails] can't place rail at {t}: tile is occupied, water, or a dug hole")
+            elif selected_type == 'cart':
+                for t in tiles:
+                    if can_place_cart(self.objects, t[0], t[1]):
+                        mirrored = get_rail_mirrored_at(self.objects, t[0], t[1])
+                        self.objects.place_object_at(*t, obj_type='cart', mirrored=mirrored)
+                        self._sync_object_lights_at(*t)
+                        print(f"[Rails] cart placed at {t}")
+                    else:
+                        print(f"[Rails] can't place cart at {t}: needs an empty rail there first "
+                              f"(top object: {self.objects.get_top_object_type(*t)!r})")
+            elif self.side_build_mode:
                 self._place_object_side_aware(tiles)
             else:
                 for t in tiles:
@@ -2200,10 +2252,43 @@ class DualViewRenderer:
                             if not self._tile_is_water(*self.selected_tile):
                                 self.fire.ignite(*self.selected_tile)
                     elif event.key == pygame.K_e:
-                        if self.show_grid and self.selected_tile is not None:
+                        if self.rails.is_locked():
+                            # Уже едем/стоим на вагонетке — повторное E отпускает камеру.
+                            self.rails.toggle_lock(self.objects, 0, 0)
+                            print("[Rails] camera released")
+                        elif self.show_grid and self.selected_tile is not None:
                             if self.objects.get_top_object_type(*self.selected_tile) == 'bomb':
                                 self._remove_bomb_at(*self.selected_tile)
                                 self.explosions.detonate(*self.selected_tile)
+                            else:
+                                top_type = self.objects.get_top_object_type(*self.selected_tile)
+                                locked = self.rails.toggle_lock(self.objects, *self.selected_tile)
+                                if locked:
+                                    print(f"[Rails] camera locked onto cart at {self.selected_tile}")
+                                else:
+                                    print(f"[Rails] no cart under cursor at {self.selected_tile} "
+                                          f"(top object there: {top_type!r}) — nothing to lock onto")
+                        else:
+                            print("[Rails] E pressed, but grid is off or no tile selected — "
+                                  "turn on the grid (G) and hover a cart first")
+                    elif event.key == pygame.K_w:
+                        if self.rails.is_locked():
+                            chosen = self.rails.set_direction(1, self.objects)
+                            if chosen is not None:
+                                print(f"[Rails] direction set: +1 (W) -> offset {chosen}")
+                            else:
+                                print("[Rails] W pressed, but no connected rail found nearby to move onto")
+                        else:
+                            print("[Rails] W pressed, but not riding a cart (press E over a cart first)")
+                    elif event.key == pygame.K_s:
+                        if self.rails.is_locked():
+                            chosen = self.rails.set_direction(-1, self.objects)
+                            if chosen is not None:
+                                print(f"[Rails] direction set: -1 (S) -> offset {chosen}")
+                            else:
+                                print("[Rails] S pressed, but no connected rail found nearby to move onto")
+                        else:
+                            print("[Rails] S pressed, but not riding a cart (press E over a cart first)")
                     elif event.key == pygame.K_f:
                         if self.show_grid and self.placement_mode == 'object':
                             if self.selected_tile is not None and self.objects.has_object_at(*self.selected_tile):
