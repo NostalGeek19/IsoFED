@@ -653,7 +653,7 @@ class DualViewRenderer:
         self.side_build_mode = False
         self.show_info = False
         self.show_object_picker = False  
-        self.show_minimap = True
+        self.show_minimap = False
         
         self.clock = pygame.time.Clock()
         self.dt = 1.0
@@ -1507,6 +1507,56 @@ class DualViewRenderer:
             if is_selected:
                 pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
     
+    def _get_dynamic_hints(self):
+        hints = []
+
+        if self.rails.is_locked():
+            hints.append("W/S ride / E release cart")
+        elif self.show_grid and self.selected_tile is not None:
+            top_type = self.objects.get_top_object_type(*self.selected_tile)
+            if top_type == 'bomb':
+                hints.append("E detonate bomb")
+            elif top_type == 'cart':
+                hints.append("E ride cart")
+
+        if self.show_grid:
+            hints.append(f"O placement: {self.placement_mode}  (G hide grid)")
+            if self.placement_mode == 'object':
+                hints.append("LMB place / RMB remove / TAB type / F mirror")
+                hints.append("Ctrl+drag build / I picker" +
+                              (" X side-build ON" if self.side_build_mode else " X side-build"))
+            elif self.placement_mode == 'dig':
+                hints.append("LMB dig / RMB fill hole")
+            else:
+                hints.append("LMB toggle lamp")
+            hints.append("Shift+hover select area")
+        else:
+            hints.append("G show grid to build")
+
+        hints.append("M minimap / Esc quit")
+        return hints
+
+    def render_dynamic_hints(self):
+        hints = self._get_dynamic_hints()
+        if not hints:
+            return
+
+        line_surfaces = [self.small_font.render(h, True, (225, 225, 225)) for h in hints]
+        width = max(s.get_width() for s in line_surfaces) + 24
+        height = sum(s.get_height() for s in line_surfaces) + 2 * (len(line_surfaces) - 1) + 12
+
+        panel = pygame.Surface((width, height), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 130))
+
+        y = 6
+        for surface in line_surfaces:
+            rect = surface.get_rect(topright=(width - 12, y))
+            panel.blit(surface, rect)
+            y += surface.get_height() + 2
+
+        panel_rect = panel.get_rect(bottomright=(self.screen_width - 20, self.screen_height - 20))
+        self.screen.blit(panel, panel_rect)
+
     def render_corner_label(self):
         text_surface = self.small_font.render(self.corner_label_text, True, self.corner_label_color)
         text_rect = text_surface.get_rect(topright=(self.screen_width - 20, 8))
@@ -1891,6 +1941,7 @@ class DualViewRenderer:
             self.render_minimap()
         
         self.render_corner_label()
+        self.render_dynamic_hints()
         
         if self.show_grid and self.show_object_picker:
             self.render_object_picker()
@@ -1907,7 +1958,7 @@ class DualViewRenderer:
         padding = 14
         panel_width = 230
         panel_height = padding * 2 + 30 + row_height * len(entries)
-        panel_x = self.screen_width - panel_width - 20
+        panel_x = 20
         panel_y = 20
 
         panel_key = (panel_width, panel_height)
@@ -2009,8 +2060,8 @@ class DualViewRenderer:
             f"Dig.: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
             f"Tree: {len(self._tree_regrow_timers)} tile(s) waiting",
             f"l: {self.lighting.count()} (grid [G])",
-            f"Obj.: {self.objects.get_status_text()} [O placement: {self.placement_mode}, {'on' if self.side_build_mode else 'off'}]",
-            f"Sel.: {len(self._get_selection_tiles())} {self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
+            f"Obj.: {self.objects.get_status_text()} [O placement: {self.placement_mode}]",
+            f"Sel.: {len(self._get_selection_tiles())} [{self.MAX_SELECTION_SIZE}x{self.MAX_SELECTION_SIZE}]",
             f"Sound: {self.sound.get_status_text()} vol {int(self.sound.get_master_volume()*100)}% [-/=]",
             f"vis.: {self.visible_tiles_count}",
             f"({visible_percent:.1f}%)",
@@ -2317,7 +2368,7 @@ class DualViewRenderer:
                         print(f"place mode: {self.placement_mode}")
                     elif event.key == pygame.K_x:
                         self.side_build_mode = not self.side_build_mode
-                        print(f"side build (Minecraft-style): {'on' if self.side_build_mode else 'off'}")
+                        print(f"side build: {'on' if self.side_build_mode else 'off'}")
                     elif event.key == pygame.K_TAB:
                         if self.placement_mode == 'object':
                             self.objects.cycle_selected_type()
