@@ -606,6 +606,10 @@ class DualViewRenderer:
         self.font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
         self.big_font = pygame.font.Font(None, 48)
+
+
+        self.corner_label_text = "Pre-release version v03.08.2026"
+        self.corner_label_color = (255, 255, 255)
         
         self.current_layer = 0
         
@@ -1503,6 +1507,16 @@ class DualViewRenderer:
             if is_selected:
                 pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
     
+    def render_corner_label(self):
+        text_surface = self.small_font.render(self.corner_label_text, True, self.corner_label_color)
+        text_rect = text_surface.get_rect(topright=(self.screen_width - 20, 8))
+
+        bg_rect = text_rect.inflate(16, 8)
+        bg = pygame.Surface(bg_rect.size, pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 120))
+        self.screen.blit(bg, bg_rect)
+        self.screen.blit(text_surface, text_rect)
+
     def render_minimap(self):
         minimap_size = 200
         minimap_x = self.screen_width - minimap_size - 20
@@ -1875,6 +1889,8 @@ class DualViewRenderer:
         
         if self.show_minimap:
             self.render_minimap()
+        
+        self.render_corner_label()
         
         if self.show_grid and self.show_object_picker:
             self.render_object_picker()
