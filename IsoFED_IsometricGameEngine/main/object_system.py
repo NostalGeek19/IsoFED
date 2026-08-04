@@ -1,5 +1,7 @@
 import os
+import math
 import pygame
+import numpy as np
 
 
 OBJECT_SEARCH_DIRS = [
@@ -8,6 +10,13 @@ OBJECT_SEARCH_DIRS = [
 ]
 
 SUPPORTED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp')
+
+OBJECT_SOUND_SEARCH_DIRS = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sound', 'objects'),
+    '/sound/objects',
+]
+SUPPORTED_SOUND_EXTENSIONS = ('.wav', '.mp3', '.ogg')
+PLACE_SOUND_SAMPLE_RATE = 22050
 
 _MISSING = object()
 
@@ -20,24 +29,28 @@ OBJECT_TYPES = {
         'texture': 'wooden_cube',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'wood',
     },
     'stone_cube': {
         'label': 'Stone Cube',
         'texture': 'stone_cube',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'stone',
     },
     'water_cube': {
         'label': 'Water Cube',
         'texture': 'water_cube',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'liquid',
     },
     'lava_cube': {
         'label': 'Lava Cube',
         'texture': 'lava_cube',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'lava',
 
         'light': {'color': (255, 110, 40), 'radius': 4.5, 'intensity': 1.2, 'flicker': 0.35},
     },
@@ -46,6 +59,7 @@ OBJECT_TYPES = {
         'texture': 'lamp_cube',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'glass',
         'light': {'color': (255, 215, 140), 'radius': 5.5, 'intensity': 1.3, 'flicker': 0.0},
     },
     'wooden_stairs': {
@@ -53,18 +67,21 @@ OBJECT_TYPES = {
         'texture': 'wooden_stairs',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'wood',
     },
     'stone_stairs': {
         'label': 'Stone Stairs',
         'texture': 'stone_stairs',
         'width_scale': 1.0,
         'level_height_scale': 0.5,
+        'sound_material': 'stone',
     },
     'bomb': {
         'label': 'Bomb',
         'texture': 'bomb',
         'width_scale': 0.85,
         'level_height_scale': 0.5,
+        'sound_material': 'metal',
     },
     'rail': {
         'label': 'Rail',
@@ -72,7 +89,7 @@ OBJECT_TYPES = {
         'width_scale': 1.0,
         'level_height_scale': 0.1,
         'no_stack': True,  
-
+        'sound_material': 'metal',
     },
     'cart': {
         'label': 'Cart',
@@ -80,12 +97,43 @@ OBJECT_TYPES = {
         'width_scale': 0.9,
         'level_height_scale': 0.15,
         'no_stack': True,  
+        'sound_material': 'metal',
     },
     # Mirroring (for stairs and similar non-symmetrical objects)
     
 }
 
 DEFAULT_OBJECT_TYPE = 'wooden_cube'
+
+
+def _make_place_sound_signal(material, seed):
+    rng = np.random.RandomState(seed)
+    n = int(PLACE_SOUND_SAMPLE_RATE * rng.uniform(0.15, 0.25))
+    t = np.arange(n) / PLACE_SOUND_SAMPLE_RATE
+
+    presets = {
+        'wood':   dict(tone_freq=170,  tone_decay=16, noise_win=6,  noise_decay=22, tone_amt=0.55),
+        'stone':  dict(tone_freq=90,   tone_decay=10, noise_win=3,  noise_decay=16, tone_amt=0.35),
+        'metal':  dict(tone_freq=480,  tone_decay=7,  noise_win=2,  noise_decay=14, tone_amt=0.75),
+        'glass':  dict(tone_freq=1400, tone_decay=20, noise_win=2,  noise_decay=25, tone_amt=0.65),
+        'liquid': dict(tone_freq=240,  tone_decay=12, noise_win=10, noise_decay=10, tone_amt=0.20),
+        'lava':   dict(tone_freq=130,  tone_decay=6,  noise_win=8,  noise_decay=8,  tone_amt=0.15),
+    }
+    p = presets.get(material, presets['wood'])
+
+    noise = rng.uniform(-1.0, 1.0, n).astype(np.float32)
+    win = max(1, int(p['noise_win']))
+    kernel = np.ones(win, dtype=np.float32) / win
+    noise = np.convolve(noise, kernel, mode='same').astype(np.float32)
+    noise_env = np.exp(-t * p['noise_decay']).astype(np.float32)
+
+    tone = np.sin(2 * math.pi * p['tone_freq'] * t).astype(np.float32)
+    tone_env = np.exp(-t * p['tone_decay']).astype(np.float32)
+
+    signal = noise * noise_env * (1.0 - p['tone_amt']) + tone * tone_env * p['tone_amt']
+    peak = float(np.abs(signal).max()) + 1e-6
+    signal = (signal / peak) * 0.85
+    return signal.astype(np.float32)
 
 
 class PlacedObject:
@@ -111,6 +159,9 @@ class ObjectSystem:
         self._raw_cache = {}      # obj_type -> Surface | _MISSING
         self._scaled_cache = {}   # (obj_type, width_px) -> Surface
         self._tint_cache = {}     # (obj_type, width_px, quantized_color) -> Surface
+
+        self._place_sound_cache = {}          # obj_type -> pygame.mixer.Sound
+        self._place_sound_missing_logged = set()
 
     # ------------------------------------------------------------------
 
@@ -343,6 +394,65 @@ class ObjectSystem:
         self._raw_cache.clear()
         self._scaled_cache.clear()
         self._tint_cache.clear()
+        self._place_sound_cache.clear()
+        self._place_sound_missing_logged.clear()
+
+    # ------------------------------------------------------------------
+    # Звук постановки объекта
+    def _find_place_sound_path(self, obj_type):
+        sound_key = OBJECT_TYPES.get(obj_type, {}).get('place_sound', obj_type)
+        for directory in OBJECT_SOUND_SEARCH_DIRS:
+            for ext in SUPPORTED_SOUND_EXTENSIONS:
+                path = os.path.join(directory, sound_key + ext)
+                if os.path.isfile(path):
+                    return path
+        return None
+
+    def get_place_sound(self, obj_type):
+        cached = self._place_sound_cache.get(obj_type)
+        if cached is not None:
+            return cached
+
+        path = self._find_place_sound_path(obj_type)
+        sound = None
+        if path is not None:
+            try:
+                sound = pygame.mixer.Sound(path)
+                print(f"Object system: loaded placement sound for '{obj_type}' from {path}")
+            except Exception as e:
+                print(f"Object system: failed to load placement sound for '{obj_type}' from {path}: {e}")
+
+        if sound is None:
+            material = OBJECT_TYPES.get(obj_type, {}).get('sound_material', 'wood')
+            if obj_type not in self._place_sound_missing_logged:
+                searched = " or ".join(OBJECT_SOUND_SEARCH_DIRS)
+                sound_key = OBJECT_TYPES.get(obj_type, {}).get('place_sound', obj_type)
+                print(f"Object system: no placement sound found for '{obj_type}' "
+                      f"(looked for {sound_key}.wav/.mp3/.ogg in {searched}) — "
+                      f"using a procedural '{material}' thud instead")
+                self._place_sound_missing_logged.add(obj_type)
+            try:
+                seed = abs(hash(obj_type)) % 1_000_000
+                signal = _make_place_sound_signal(material, seed)
+                pcm = np.clip(signal, -1.0, 1.0)
+                pcm = (pcm * 32767).astype(np.int16)
+                stereo = np.column_stack([pcm, pcm])
+                sound = pygame.sndarray.make_sound(stereo)
+            except Exception as e:
+                print(f"Object system: failed to generate placement sound for '{obj_type}': {e}")
+                return None
+
+        self._place_sound_cache[obj_type] = sound
+        return sound
+
+    def play_place_sound(self, obj_type, sound_system, volume=1.0):
+        if sound_system is None or not getattr(sound_system, 'enabled', False):
+            return
+        sound = self.get_place_sound(obj_type)
+        if sound is None:
+            return
+        if hasattr(sound_system, 'play_one_shot'):
+            sound_system.play_one_shot(sound, volume=volume)
 
     def _draw_object(self, screen, obj_type, level, mirrored, screen_x, screen_y,
                       pixels_per_tile, half_tile, quarter_tile, light_color=None, rotation_fn=None):
