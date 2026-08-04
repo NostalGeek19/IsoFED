@@ -608,7 +608,7 @@ class DualViewRenderer:
         self.big_font = pygame.font.Font(None, 48)
 
 
-        self.corner_label_text = "Pre-release version v03.08.2026"
+        self.corner_label_text = "Pre-release version v04.08.2026"
         self.corner_label_color = (255, 255, 255)
         
         self.current_layer = 0
@@ -2162,6 +2162,7 @@ class DualViewRenderer:
         return best
 
     def _place_object_side_aware(self, tiles):
+        selected_type = self.objects.get_selected_type()
         remaining = list(tiles)
         for _ in range(len(remaining) + 1):
             progressed = False
@@ -2175,6 +2176,7 @@ class DualViewRenderer:
                     continue
                 if self.objects.place_object_at(*t, level=reference_level):
                     self._sync_object_lights_at(*t)
+                    self.objects.play_place_sound(selected_type, self.sound)
                     progressed = True
             remaining = still_remaining
             if not progressed:
@@ -2185,6 +2187,7 @@ class DualViewRenderer:
                 continue
             if self.objects.place_object_at(*t):
                 self._sync_object_lights_at(*t)
+                self.objects.play_place_sound(selected_type, self.sound)
 
     def _apply_placement_action_at(self, tiles):
         if self.placement_mode == 'object':
@@ -2194,6 +2197,7 @@ class DualViewRenderer:
                     if can_place_rail(self.objects, t[0], t[1], self._tile_blocks_rail_placement):
                         self.objects.place_object_at(*t, obj_type='rail')
                         self._sync_object_lights_at(*t)
+                        self.objects.play_place_sound('rail', self.sound)
                     else:
                         print(f"[Rails] can't place rail at {t}: tile is occupied, water, or a dug hole")
             elif selected_type == 'cart':
@@ -2202,6 +2206,7 @@ class DualViewRenderer:
                         mirrored = get_rail_mirrored_at(self.objects, t[0], t[1])
                         self.objects.place_object_at(*t, obj_type='cart', mirrored=mirrored)
                         self._sync_object_lights_at(*t)
+                        self.objects.play_place_sound('cart', self.sound)
                         print(f"[Rails] cart placed at {t}")
                     else:
                         print(f"[Rails] can't place cart at {t}: needs an empty rail there first "
@@ -2213,6 +2218,7 @@ class DualViewRenderer:
                     if not self._tile_blocks_new_object_placement(*t):
                         self.objects.place_object_at(*t)
                         self._sync_object_lights_at(*t)
+                        self.objects.play_place_sound(selected_type, self.sound)
         elif self.placement_mode == 'dig':
             for t in tiles:
                 if not self._tile_blocks_digging(*t):
@@ -2224,13 +2230,18 @@ class DualViewRenderer:
     def _apply_horizontal_build_at_height(self, tiles, reference_height):
         if self.placement_mode != 'object' or reference_height <= 0:
             return
+        selected_type = self.objects.get_selected_type()
         for t in tiles:
             if self._tile_blocks_new_object_placement(*t):
                 continue
+            placed_any = False
             while self.objects.get_stack_height(*t) < reference_height:
                 if not self.objects.place_object_at(*t):
                     break  
                 self._sync_object_lights_at(*t)
+                placed_any = True
+            if placed_any:
+                self.objects.play_place_sound(selected_type, self.sound)
 
     def select_tile_at_screen(self, screen_x, screen_y):
         world_px_x, world_px_y = self.screen_to_world(screen_x, screen_y)
