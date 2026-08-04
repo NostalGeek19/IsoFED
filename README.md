@@ -1,7 +1,7 @@
 # Isometric SandBox and Game Engine
 ![World preview](screenshots/ISOFED.png)
 
-A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects, a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
+A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects (including detonating bombs and a rail/cart system you can ride), a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
 
 No external art or audio assets are required to run the project: terrain is colored procedurally, fire and lightning are drawn procedurally, and every sound effect is synthesized at startup with NumPy. Point the sound/fire systems at your own `.wav` / `.mp3` / `.ogg` / `.png` files to replace any procedural fallback with real assets whenever you're ready.
 
@@ -39,6 +39,9 @@ No external art or audio assets are required to run the project: terrain is colo
 ### Manual lighting (lamps)
 ![World preview](screenshots/light2.png)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
+- Light doesn't pass through walls: if a placed object stands directly between a lamp and a tile, that tile gets none of the lamp's light — checked with a real line-of-sight trace between the two, not just a flat radius.
+- A lamp sitting on top of a tall stack doesn't leak its glow down onto the bare ground far below at the base of that same column — it lights up its surroundings at its own height instead.
+- The ground under any tall structure is shaded a bit darker on its own, proportional to how many blocks are stacked on it — a plain ambient "something's blocking the sky here" effect, independent of any lamp.
 
 ### Thunderstorms
 ![World preview](screenshots/thunder.png)
@@ -55,6 +58,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Ignition plays a sound (`sound/fire/ignite.*`, or a procedurally generated crackle if you don't provide one) — but only if the tree is inside the chunk you're currently viewing, so a fire smoldering far away doesn't steal audio channels from what's actually on screen.
 - Once a tree burns out: the grass underneath goes dark and scorched for **2 minutes**, then returns to its normal color, and the tree itself only grows back after **4–5 minutes** total — it doesn't just pop back the instant the ash clears.
 - A tree won't grow on a tile that already has a placed object sitting on it, and you can't place an object or dig a hole on a tile that currently has a live tree.
+- Fire can't be started on water — the forced-ignite key (`L`, see below) simply refuses on any water tile, and the normal lightning/spread mechanics never touch water in the first place since it's never `dense_forest`.
 
 ### Textures
 ![World preview](screenshots/textures_2.png)
@@ -160,7 +164,7 @@ Useful for asymmetric objects (stairs):
 
 ![World preview](screenshots/object_5.png)
 
-While the grid is active, `I` opens a panel on the right listing all
+While the grid is active, `I` opens a panel on the **left** listing all
 available object types:
 
 - each entry shows a texture preview (or a placeholder if the texture
@@ -182,6 +186,9 @@ available object types:
 | `lamp_cube` | `lamp_cube.png` | glows with a steady warm light |
 | `wooden_stairs` | `wooden_stairs.png` | asymmetric — supports mirroring |
 | `stone_stairs` | `stone_stairs.png` | asymmetric — supports mirroring |
+| `bomb` | `bomb.png` | detonates on `E` — see "Bombs & explosions" below |
+| `rail` | `rail.png` | can't stack, can't float, can't go in water/on a hole — see "Rails & the cart" |
+| `cart` | `cart.png` | only placeable on top of a rail — see "Rails & the cart" |
 
 Textures are looked up in `textures/objects/<name>.png` (or
 `.jpg/.jpeg/.bmp`) next to the scripts, or in `/textures/objects`. If a
@@ -241,11 +248,29 @@ The new type will immediately show up in the picker panel (`I`), in the
 `TAB` cycle, and will fully support stacking/mirroring/lighting — no
 changes needed anywhere else in the code.
 
+### Building faster: drag-to-build & side-building
+
+- **Hold `Ctrl` and drag the mouse** (with the grid active) to place/dig/
+  toggle-light along the whole path the cursor travels, instead of clicking
+  one tile at a time — handy for walls, trenches, or rows of lamps. The path
+  between mouse positions is filled in automatically so a fast drag never
+  skips a tile.
+- **`X`** toggles "side-building" mode: instead of always stacking straight
+  up on the tile you click, a new block is placed **level with the tallest
+  neighboring block** — so building sideways off an existing wall extends it
+  at the same height, including out over open ocean (a plain new column
+  still can't be started over water, but *extending* an existing one can).
+- **Alt + drag** fills every tile you drag over up to the height of
+  whichever block was already under the cursor when the drag started — a
+  quick way to level out a whole wall to match one reference column.
+
 ### Digging & water flow
 
 - Switch the placement mode to `dig` (`O`) and left-click a tile (or a Shift
   selection) to dig it out; right-click fills it back in. You can't dig
-  under a placed object or a live tree — remove those first.
+  under a placed object or a live tree — remove those first, and you can't
+  dig in water (shallow or deep) either — draining the ocean isn't on the
+  table.
 - A dug tile darkens, and — since the tile's lighting-adjusted color is
   computed once and reused for the ground *and* every overlay drawn on top
   of it — the whole hole (and anything visually layered on it) darkens
@@ -260,6 +285,14 @@ changes needed anywhere else in the code.
 - The water in a hole reacts to lighting exactly like ordinary water — day/
   night tint, nearby lamps, fire glow — plus a subtle ripple, instead of
   freezing into one flat, unlit color once it's full.
+- Filling a hole back in doesn't bring a tree back instantly, either — same
+  4–5 minute regrowth timer as after a fire (see below), so a freshly
+  refilled patch of `dense_forest` stays bare for a while before a tree can
+  grow there again.
+- You can't build a plain object on open ocean (`ocean`/`deep_ocean`) from
+  scratch — `shallow_water` is fine, and side-building (`X`, see above) can
+  still extend an existing structure out over deep water once it has
+  something to attach to.
 
 ### Camera rotation
 ![World preview](screenshots/rot_1.png)
@@ -271,6 +304,21 @@ changes needed anywhere else in the code.
 - The snap itself is instant, but a short crossfade (the old view fading out over the new one, ~0.18s) makes the turn read as a smooth, real-time rotation instead of a hard cut.
 - Camera-relative controls (`WASD`, right-click pan) keep working the way you'd expect after rotating — "forward" is still "up the screen", not a fixed world direction.
 
+### Bombs & explosions
+- Place a `bomb` like any other object, then hover it and press `E` to detonate — a screen flash, an expanding shockwave ring, and a layered fireball, plus a real explosion sound (`sound/explosion/boom.*`, or a procedurally generated "crack + rumble + thump" if you don't provide one).
+- The blast destroys every ordinary object (and any live tree) within its radius — trees come back on the same 4–5 minute regrowth timer as after a fire, other objects are just gone.
+- The ground around the blast is scorched — darkened proportionally to distance from the epicenter — and fades back to normal over **20 seconds**.
+- **Chain reaction**: any other bomb within 2 tiles of the blast goes off too, with a short (~0.12s) delay per link so the chain visibly ripples from bomb to bomb instead of every linked bomb detonating in the same frame.
+- A bomb also has a "fuse": if a burning tree ends up within 1 tile of it, it detonates on its own after a random 4–5 seconds, whether or not you ever press `E`.
+- You can also just drop your own `textures/explosion/explosion.png` (single frame) or `explosion_1.png`, `explosion_2.png`, ... (an animated sequence) to replace the procedural fireball.
+
+### Rails & the cart
+- `rail` places like a normal object but with its own rules: it can't be stacked on anything (not even another rail), it can't float in the air, and it can't go in water or on top of a dug hole.
+- `cart` can only be placed on top of an existing bare rail tile.
+- Press `F` on a rail (or while it's the "armed" type before placing) to flip it between its two orientations — this is a horizontal mirror of the artwork, matching how the rail is drawn diagonally across the tile, not a 90° rotation.
+- Hover a cart and press `E` to lock the camera onto it; press `E` again anytime to let go. While riding, `W` / `S` pick a direction — the cart looks at the rails actually connected to its current tile and rolls that way, so it always follows real track regardless of how any individual rail segment happens to be mirrored. It keeps rolling in a straight line until the track ends, turns, or you stop it.
+- Both `rail` and `cart` react to light and get destroyed by explosions exactly like any other object.
+
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
 - Biome ambience loads from your own audio files (`sound/bioms/forest.*`, `plains.*`, `desert.*`, `water.*`, `mountains.*`, `swamp.*` — `.wav`/`.mp3`/`.ogg`, first match wins). Any biome missing a file falls back to a procedurally generated wind/water/critter texture so the game is never silent, with a clear console warning telling you exactly which file to add.
@@ -281,7 +329,8 @@ changes needed anywhere else in the code.
 
 ### UI & tools
 - Live info panel (FPS, camera/chunk position, zoom, weather/sun/light/sound/fire/digging status, camera rotation, current selection size, tile under cursor).
-- Minimap with click-to-travel.
+- Minimap with click-to-travel, top-right.
+- Object picker panel (`I`, grid on) — top-left, so it doesn't collide with the minimap.
 ---
 
 ## Minimum system requirements
@@ -328,12 +377,15 @@ The engine is deliberately split into small, self-contained modules. Most only n
 ├── object_system.py          # Placeable objects (cubes, stairs), stacking, mirroring, picker UI
 ├── digging_system.py         # Dug-out tiles (holes), darkening, dirt fill-back-in
 ├── water_flow_system.py      # Water physics flowing into holes near shallow_water
+├── explosion_system.py       # Bomb detonation: shockwave/fireball visuals, scorch decay, chain reaction
+├── rails_system.py           # Rail/cart placement rules, connectivity-based movement, camera-follow
 ├── camera_rotation_system.py # 90°-stepped camera rotation, drag-to-rotate
 ├── sound_system.py           # Biome ambience (file-based) + procedural weather audio + SFX channel pool
 ├── texture_manager.py        # Texture loading, caching, and overlay management
 ├── sound/
 │   ├── bioms/                # Drop your own forest.wav / plains.mp3 / etc. here (optional)
-│   └── fire/                 # Drop your own ignite.wav here (optional)
+│   ├── fire/                 # Drop your own ignite.wav here (optional)
+│   └── explosion/             # Drop your own boom.wav here (optional)
 └── textures/
     ├── bioms/                # Base biome textures (.png format)
     │   ├── grassland.png
@@ -355,8 +407,12 @@ The engine is deliberately split into small, self-contained modules. Most only n
     │   ├── lava_cube.png
     │   ├── lamp_cube.png
     │   ├── wooden_stairs.png
-    │   └── stone_stairs.png
-    └── fire/                  # Drop your own fire.png (or fire_1.png, fire_2.png, ...) here (optional)
+    │   ├── stone_stairs.png
+    │   ├── bomb.png
+    │   ├── rail.png
+    │   └── cart.png
+    ├── fire/                  # Drop your own fire.png (or fire_1.png, fire_2.png, ...) here (optional)
+    └── explosion/              # Drop your own explosion.png (or explosion_1.png, ...) here (optional)
 ```
 
 ### Module responsibilities at a glance
@@ -370,6 +426,8 @@ The engine is deliberately split into small, self-contained modules. Most only n
 | `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes | `place_object_at()` / `remove_top_object_at()`, `render_at_tile(..., light_fn=...)`, `render_preview()` |
 | `digging_system.py` | Dug-tile state, darkening | `dig_at()` / `fill_dirt_at()`, `apply_darken()` |
 | `water_flow_system.py` | Water spreading into holes | `update(dt, water_neighbor_fn)`, `get_water_color()` |
+| `explosion_system.py` | Explosion visuals, ground scorch decay, chain-reaction scheduling, boom audio | `detonate()`, `update(dt)`, `apply_darken()`, `render()`, `find_bombs_fn`/`remove_bomb_fn`/`destroy_objects_fn` callbacks |
+| `rails_system.py` | Rail/cart placement rules, connectivity-based cart movement, camera-follow target | `can_place_rail()` / `can_place_cart()`, `toggle_lock()`, `set_direction()`, `update(dt, objects)`, `get_camera_target_tile()` |
 | `camera_rotation_system.py` | Camera rotation state, coordinate transform | `to_view_space()` / `to_world_space()`, `accumulate_drag()` |
 | `sound_system.py` | Ambient/weather/one-shot audio playback | `set_dominant_biome()`, `set_weather()`, `play_one_shot()`, `set_active_chunk_bounds()` |
 | `texture_manager.py` | Texture loading, caching, and overlay management | `get_diamond_texture()`, `get_grass_overlay()`, `get_tree_overlay()`, `get_flower_texture()` |
@@ -381,13 +439,16 @@ The engine is deliberately split into small, self-contained modules. Most only n
 ## Controls
 | Key | Action |
 |---|---|
-| `WASD` / Arrow keys | Move camera (camera-relative — stays intuitive after rotating) |
+| `WASD` / Arrow keys | Move camera (camera-relative — stays intuitive after rotating); while riding a cart, `W`/`S` instead pick its direction |
 | `Shift` + move | Move faster |
 | Right-click drag | Pan camera |
 | Middle-click drag | Rotate camera (snaps to 90° steps, smoothed with a crossfade) |
 | Left-click (minimap) | Jump camera to that point |
 | `G` | Toggle grid — hover to highlight a tile |
 | `Shift` + hover (grid) | Select a rectangle of tiles (up to 6×6) instead of just one |
+| `Ctrl` + drag (grid) | Place/dig/toggle-light continuously along the path the mouse travels |
+| `Alt` + drag (grid, object mode) | Fill dragged-over tiles up to the height of the block under the cursor when the drag started |
+| `X` | Toggle side-building mode — new blocks match a neighbor's height instead of always stacking straight up |
 | `O` | Cycle grid-click mode: **light** → **object** → **dig** |
 | Left-click (grid, light mode) | Toggle a lamp on the selected tile(s) |
 | Left-click (grid, object mode) | Place the selected object on top of the stack |
@@ -396,8 +457,9 @@ The engine is deliberately split into small, self-contained modules. Most only n
 | Right-click (grid, dig mode) | Fill the hole back in |
 | `TAB` | Cycle the selected object type |
 | `F` | Mirror the top object on the selected tile, or arm mirroring for the next placement |
-| `I` | Toggle info panel (grid off) / object picker panel (grid on) |
-| `L` | Force-ignite the selected tile (fire testing) |
+| `I` | Toggle info panel (grid off) / object picker panel, top-left (grid on) |
+| `E` | Detonate a bomb under the cursor, or lock/unlock the camera onto a cart under the cursor |
+| `L` | Force-ignite the selected tile (fire testing; refuses on water) |
 | `M` | Toggle minimap |
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
