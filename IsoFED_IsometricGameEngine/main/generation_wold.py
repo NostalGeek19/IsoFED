@@ -699,7 +699,7 @@ class DualViewRenderer:
                                            remove_bomb_fn=self._remove_bomb_at,
                                            destroy_objects_fn=self._destroy_objects_within)
 
-        self.rails = RailsSystem()
+        self.rails = RailsSystem(sound_system=self.sound)
 
 
         self._bomb_fuse_timers = {}   # (tile_x, tile_y) 
