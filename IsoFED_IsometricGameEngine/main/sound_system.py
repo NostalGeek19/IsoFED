@@ -87,6 +87,7 @@ class SoundSystem:
         self._next_channel_index = 0
         self._effect_channels = []
         self._effect_channel_cursor = 0
+        self._dedicated_channels = {}   # key -> Channel
 
 
         self._active_chunk_bounds = None
@@ -251,6 +252,15 @@ class SoundSystem:
         self._effect_channel_cursor = (self._effect_channel_cursor + 1) % len(self._effect_channels)
         channel.set_volume(max(0.0, min(1.0, volume)) * self.master_volume)
         channel.play(sound)
+        return channel
+
+    def get_dedicated_channel(self, key):
+        if not self.enabled:
+            return None
+        channel = self._dedicated_channels.get(key)
+        if channel is None:
+            channel = self._reserve_channel()
+            self._dedicated_channels[key] = channel
         return channel
 
     def set_active_chunk_bounds(self, chunk_bounds):
