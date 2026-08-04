@@ -162,8 +162,10 @@ class FireSystem:
 
     def ignite(self, tile_x, tile_y):
         key = (int(tile_x), int(tile_y))
-        if key in self.fires or key in self.ash:
+        if key in self.fires:
             return False
+        if key in self.ash:
+            del self.ash[key]
         self._ignite(key)
         return True
 
