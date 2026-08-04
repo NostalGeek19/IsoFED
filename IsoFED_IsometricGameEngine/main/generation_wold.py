@@ -2295,6 +2295,17 @@ class DualViewRenderer:
         )
         self.iso_coords.clear()
         self._gl_mesh_key = None
+
+        self.objects.remove_all()
+        self._object_light_tiles.clear()
+        self.lighting.remove_all()
+        self.digging.remove_all()
+        self.fire.remove_all()
+        self.explosions.remove_all()
+        self.rails.cart = None
+        self._tree_regrow_timers.clear()
+        self._bomb_fuse_timers.clear()
+
         self.world_camera_x = self.world.width * self.world.tile_size // 2
         self.world_camera_y = self.world.height * self.world.tile_size // 2
         self.target_world_camera_x = self.world_camera_x
