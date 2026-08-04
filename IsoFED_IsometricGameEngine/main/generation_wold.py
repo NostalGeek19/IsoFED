@@ -1179,8 +1179,16 @@ class DualViewRenderer:
         biome_name = self._biome_id_to_name.get(tile_type)
         return biome_name in ('deep_ocean', 'ocean')
 
+    def _tile_has_no_stack_object(self, tile_x, tile_y):
+        top_type = self.objects.get_top_object_type(tile_x, tile_y)
+        if top_type is None:
+            return False
+        return self.objects.is_no_stack_type(top_type)
+
     def _tile_blocks_new_object_placement(self, tile_x, tile_y):
-        return self._tile_blocks_object_placement(tile_x, tile_y) or self._tile_is_ocean(tile_x, tile_y)
+        return (self._tile_blocks_object_placement(tile_x, tile_y)
+                or self._tile_is_ocean(tile_x, tile_y)
+                or self._tile_has_no_stack_object(tile_x, tile_y))
 
     def _tile_blocks_object_placement(self, tile_x, tile_y):
         size = self.world.chunk_size
@@ -2163,7 +2171,7 @@ class DualViewRenderer:
                 if reference_level < 0:
                     still_remaining.append(t)
                     continue
-                if self._tile_blocks_object_placement(*t):
+                if self._tile_blocks_object_placement(*t) or self._tile_has_no_stack_object(*t):
                     continue
                 if self.objects.place_object_at(*t, level=reference_level):
                     self._sync_object_lights_at(*t)
@@ -2316,11 +2324,14 @@ class DualViewRenderer:
                         self.show_grid = not self.show_grid
                     elif event.key == pygame.K_l:
                         if self.show_grid and self.selected_tile is not None:
-                            if not self._tile_is_water(*self.selected_tile):
-                                self.fire.ignite(*self.selected_tile)
+                            if self._tile_is_water(*self.selected_tile):
+                                print(f"[Fire] can't ignite {self.selected_tile}: it's water")
+                            elif self.fire.ignite(*self.selected_tile):
+                                print(f"[Fire] ignited {self.selected_tile}")
+                            else:
+                                print(f"[Fire] {self.selected_tile} is already burning right now")
                     elif event.key == pygame.K_e:
                         if self.rails.is_locked():
-                            # Уже едем/стоим на вагонетке — повторное E отпускает камеру.
                             self.rails.toggle_lock(self.objects, 0, 0)
                             print("[Rails] camera released")
                         elif self.show_grid and self.selected_tile is not None:
