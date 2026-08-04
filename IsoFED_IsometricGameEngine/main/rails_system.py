@@ -140,10 +140,29 @@ class RailsSystem:
 
     # ------------------------------------------------------------------
     def update(self, dt, objects):
-        if self.cart is None or not self.cart.moving:
+        if self.cart is None:
             return
 
         cart = self.cart
+
+        if cart.progress <= 0.0:
+            if objects.get_top_object_type(cart.tile_x, cart.tile_y) != CART_TYPE:
+                self.cart = None
+                return
+        else:
+            from_x, from_y = cart.from_tile
+            if objects.get_top_object_type(from_x, from_y) != CART_TYPE:
+                self.cart = None
+                return
+            to_x, to_y = cart.to_tile
+            if not can_place_cart(objects, to_x, to_y):
+                cart.moving = False
+                cart.progress = 0.0
+                return
+
+        if not cart.moving:
+            return
+
         if cart.progress <= 0.0:
             if cart.move_offset is None:
                 cart.moving = False
