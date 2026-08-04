@@ -1,7 +1,7 @@
 # Isometric SandBox and Game Engine
 ![World preview](screenshots/ISOFED.png)
 
-A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects (including detonating bombs and a rail/cart system you can ride), a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
+A procedurally generated isometric game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects (including detonating bombs and a rail/cart system you can ride), a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
 
 No external art or audio assets are required to run the project: terrain is colored procedurally, fire and lightning are drawn procedurally, and every sound effect is synthesized at startup with NumPy. Point the sound/fire systems at your own `.wav` / `.mp3` / `.ogg` / `.png` files to replace any procedural fallback with real assets whenever you're ready.
 
