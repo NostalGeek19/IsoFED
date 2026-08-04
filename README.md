@@ -16,7 +16,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Perlin-style noise is fully vectorized with NumPy (no per-tile Python loops), so chunk generation stays fast even at large world sizes.
 - Height is normalized against a **global** min/max sampled once across the whole world, so neighboring chunks blend into one continuous, natural-looking landscape instead of each chunk stretching its own local contrast.
 - Asynchronous chunk loading via a background thread pool.
-- One click (`R`) regenerates the entire world with a fresh seed.
+- One click (`R`) regenerates the entire world with a fresh seed — this also wipes every player-made change with it (placed objects, dug holes, lamps, fire/ash, explosion scorch marks, rails and the cart), so you always start from a truly clean slate rather than a fresh terrain layered under old leftovers.
 
 ### Weather
 ![World preview](screenshots/rain.png)
@@ -59,6 +59,7 @@ No external art or audio assets are required to run the project: terrain is colo
 - Once a tree burns out: the grass underneath goes dark and scorched for **2 minutes**, then returns to its normal color, and the tree itself only grows back after **4–5 minutes** total — it doesn't just pop back the instant the ash clears.
 - A tree won't grow on a tile that already has a placed object sitting on it, and you can't place an object or dig a hole on a tile that currently has a live tree.
 - Fire can't be started on water — the forced-ignite key (`L`, see below) simply refuses on any water tile, and the normal lightning/spread mechanics never touch water in the first place since it's never `dense_forest`.
+- `L` is a forced/debug ignite, so unlike natural spread it doesn't respect a tile's leftover "still recovering" cooldown — pressing it on a spot that already burned re-ignites immediately instead of silently doing nothing until the full internal regrowth timer runs out. The only thing that stops it is a tile that's already on fire right now.
 
 ### Textures
 ![World preview](screenshots/textures_2.png)
@@ -187,7 +188,7 @@ available object types:
 | `wooden_stairs` | `wooden_stairs.png` | asymmetric — supports mirroring |
 | `stone_stairs` | `stone_stairs.png` | asymmetric — supports mirroring |
 | `bomb` | `bomb.png` | detonates on `E` — see "Bombs & explosions" below |
-| `rail` | `rail.png` | can't stack, can't float, can't go in water/on a hole — see "Rails & the cart" |
+| `rail` | `rail.png` | nothing can be placed on it (not even a regular block), can't float, can't go in water/on a hole — see "Rails & the cart" |
 | `cart` | `cart.png` | only placeable on top of a rail — see "Rails & the cart" |
 
 Textures are looked up in `textures/objects/<name>.png` (or
@@ -313,17 +314,21 @@ changes needed anywhere else in the code.
 - You can also just drop your own `textures/explosion/explosion.png` (single frame) or `explosion_1.png`, `explosion_2.png`, ... (an animated sequence) to replace the procedural fireball.
 
 ### Rails & the cart
-- `rail` places like a normal object but with its own rules: it can't be stacked on anything (not even another rail), it can't float in the air, and it can't go in water or on top of a dug hole.
+- `rail` places like a normal object but with its own rules: it can't be stacked on anything (not even another rail), nothing else can be placed on top of it either, it can't float in the air, and it can't go in water or on top of a dug hole.
 - `cart` can only be placed on top of an existing bare rail tile.
 - Press `F` on a rail (or while it's the "armed" type before placing) to flip it between its two orientations — this is a horizontal mirror of the artwork, matching how the rail is drawn diagonally across the tile, not a 90° rotation.
 - Hover a cart and press `E` to lock the camera onto it; press `E` again anytime to let go. While riding, `W` / `S` pick a direction — the cart looks at the rails actually connected to its current tile and rolls that way, so it always follows real track regardless of how any individual rail segment happens to be mirrored. It keeps rolling in a straight line until the track ends, turns, or you stop it.
+- The cart plays a looping rolling/rattling sound while it's actually moving, fading in and out smoothly as it starts and stops rather than snapping on and off — drop your own `sound/rails/cart_move.wav` (`.mp3`/`.ogg` also work) to replace the procedural version.
+- If the rail or cart you're riding gets destroyed out from under you mid-ride — say, blown up while you're mid-transit between two tiles — the cart stops right where it actually is (or the camera is released entirely if the destroyed tile was the one you were standing on) instead of continuing to glide over rails that are no longer there.
 - Both `rail` and `cart` react to light and get destroyed by explosions exactly like any other object.
 
 ### Sound
 - Two independent layers: a looping **biome ambience** and a **weather** track, each with its own crossfade.
 - Biome ambience loads from your own audio files (`sound/bioms/forest.*`, `plains.*`, `desert.*`, `water.*`, `mountains.*`, `swamp.*` — `.wav`/`.mp3`/`.ogg`, first match wins). Any biome missing a file falls back to a procedurally generated wind/water/critter texture so the game is never silent, with a clear console warning telling you exactly which file to add.
 - Weather sound (rain/snow/sandstorm) is fully procedural — filtered/modulated noise, no assets needed — and its volume tracks the current precipitation intensity.
-- One-shot sound effects (thunder, tree ignition) go through a small dedicated pool of channels (`play_one_shot`) that's always kept separate from the looping ambience/weather channels — a burst of simultaneous effects can never accidentally steal and silence a background loop.
+- Placing any object plays a short placement sound, generated procedurally from the object's material (`sound_material` in `object_system.py` — wood/stone/metal/glass/liquid/lava each get a distinct little "thud"/"clink"/"clunk") unless you drop your own file in `sound/objects/<type_name>.*` (or a shared filename via `place_sound` in the type's definition).
+- One-shot sound effects (thunder, tree ignition, explosions, object placement) go through a small dedicated pool of channels (`play_one_shot`) that's always kept separate from the looping ambience/weather channels — a burst of simultaneous effects can never accidentally steal and silence a background loop.
+- Continuous, state-driven sounds (like the cart's rolling loop while it's moving) get their own permanently-reserved channel (`get_dedicated_channel`) instead — so they fade smoothly in and out with the thing they're attached to, without competing with the one-shot pool or the ambience/weather loops.
 - Ambience and weather both fade to silence underground or while a chunk is still loading, instead of cutting abruptly.
 - Master volume with `-` / `=`.
 
@@ -383,9 +388,11 @@ The engine is deliberately split into small, self-contained modules. Most only n
 ├── sound_system.py           # Biome ambience (file-based) + procedural weather audio + SFX channel pool
 ├── texture_manager.py        # Texture loading, caching, and overlay management
 ├── sound/
-│   ├── bioms/                # Drop your own forest.wav / plains.mp3 / etc. here (optional)
-│   ├── fire/                 # Drop your own ignite.wav here (optional)
-│   └── explosion/             # Drop your own boom.wav here (optional)
+│   ├── bioms/                 # Drop your own forest.wav / plains.mp3 / etc. here (optional)
+│   ├── fire/                  # Drop your own ignite.wav here (optional)
+│   ├── explosion/              # Drop your own boom.wav here (optional)
+│   ├── objects/                # Drop your own <object_type>.wav (placement sound) here (optional)
+│   └── rails/                  # Drop your own cart_move.wav here (optional)
 └── textures/
     ├── bioms/                # Base biome textures (.png format)
     │   ├── grassland.png
@@ -423,13 +430,13 @@ The engine is deliberately split into small, self-contained modules. Most only n
 | `lighting_system.py` | Lamp placement & rendering | `toggle_light_at()`, `get_tile_light_boost()`, `render(..., chunk_bounds=...)` |
 | `thunderstorm_system.py` | Lightning strikes, thunder, storm state | `update(dt, weather_kind, weather_intensity, camera_tile_bounds, biome_at_fn, current_biome)`, `get_light_boost()`, `render()`, `on_strike` callback |
 | `fire_system.py` | Tree ignition/spread/burnout, scorched-grass and regrowth timers | `try_ignite_from_lightning()`, `update(dt, tree_at_fn)`, `get_light_boost()`, `render()` |
-| `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes | `place_object_at()` / `remove_top_object_at()`, `render_at_tile(..., light_fn=...)`, `render_preview()` |
+| `object_system.py` | Placeable object stacks, mirroring, picker UI, self-lit cubes, per-material placement sounds | `place_object_at()` / `remove_top_object_at()`, `render_at_tile(..., light_fn=...)`, `render_preview()`, `play_place_sound()` |
 | `digging_system.py` | Dug-tile state, darkening | `dig_at()` / `fill_dirt_at()`, `apply_darken()` |
 | `water_flow_system.py` | Water spreading into holes | `update(dt, water_neighbor_fn)`, `get_water_color()` |
 | `explosion_system.py` | Explosion visuals, ground scorch decay, chain-reaction scheduling, boom audio | `detonate()`, `update(dt)`, `apply_darken()`, `render()`, `find_bombs_fn`/`remove_bomb_fn`/`destroy_objects_fn` callbacks |
 | `rails_system.py` | Rail/cart placement rules, connectivity-based cart movement, camera-follow target | `can_place_rail()` / `can_place_cart()`, `toggle_lock()`, `set_direction()`, `update(dt, objects)`, `get_camera_target_tile()` |
 | `camera_rotation_system.py` | Camera rotation state, coordinate transform | `to_view_space()` / `to_world_space()`, `accumulate_drag()` |
-| `sound_system.py` | Ambient/weather/one-shot audio playback | `set_dominant_biome()`, `set_weather()`, `play_one_shot()`, `set_active_chunk_bounds()` |
+| `sound_system.py` | Ambient/weather/one-shot audio playback, dedicated channels for continuous per-object sounds | `set_dominant_biome()`, `set_weather()`, `play_one_shot()`, `get_dedicated_channel()`, `set_active_chunk_bounds()` |
 | `texture_manager.py` | Texture loading, caching, and overlay management | `get_diamond_texture()`, `get_grass_overlay()`, `get_tree_overlay()`, `get_flower_texture()` |
 
 `generation_wold.py` is the only module that knows about all the others; it computes the "dominant biome/weather kind" for the current camera view once per frame (with hysteresis, so the result doesn't flicker right on a biome border) and feeds it to whichever systems need it.
@@ -459,7 +466,7 @@ The engine is deliberately split into small, self-contained modules. Most only n
 | `F` | Mirror the top object on the selected tile, or arm mirroring for the next placement |
 | `I` | Toggle info panel (grid off) / object picker panel, top-left (grid on) |
 | `E` | Detonate a bomb under the cursor, or lock/unlock the camera onto a cart under the cursor |
-| `L` | Force-ignite the selected tile (fire testing; refuses on water) |
+| `L` | Force-ignite the selected tile (fire testing; refuses on water, but re-ignites even a tile that already burned) |
 | `M` | Toggle minimap |
 | `R` | Regenerate the world with a new seed |
 | `F2` | Force a weather change |
