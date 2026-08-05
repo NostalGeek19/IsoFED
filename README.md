@@ -1,7 +1,10 @@
 # Isometric SandBox and Game Engine
+
+**English** | [Русский](README_ru.md)
+
 ![World preview](screenshots/ISOFED.png)
 
-A procedurally generated isometric game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects (including detonating bombs and a rail/cart system you can ride), a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
+A procedurally generated isometric (with legacy top-down) game engine built on **Python + Pygame + NumPy**. Chunk-streamed terrain, a biome-aware weather system with smooth crossfades, a real day/night cycle that drives dynamic terrain shading, lightning-sparked forest fires, water that physically flows into dug-out holes, placeable lamps and buildable objects (including detonating bombs and a rail/cart system you can ride), a rotatable camera, and a layered ambient/weather soundscape — all built as independent, drop-in modules around a single core renderer.
 
 No external art or audio assets are required to run the project: terrain is colored procedurally, fire and lightning are drawn procedurally, and every sound effect is synthesized at startup with NumPy. Point the sound/fire systems at your own `.wav` / `.mp3` / `.ogg` / `.png` files to replace any procedural fallback with real assets whenever you're ready.
 
@@ -276,8 +279,7 @@ changes needed anywhere else in the code.
   of it — the whole hole (and anything visually layered on it) darkens
   together as a single "empty pit" effect.
 - If a hole ends up next to `shallow_water`, water gradually flows in and
-  fills it — **wide pool** (part
-  of a solid 2×2-or-bigger dug block) fills a bit **slower**, while a
+  fills it a **wide pool** (part of a solid 2×2-or-bigger dug block) fills a bit **slower**, while a
   **narrow, one-tile-wide corridor or dead end** fills **much faster**, as if
   under pressure through a single channel. A filled (or half-filled)
   hole becomes a water source for its own neighbors, so water can chain
@@ -335,6 +337,8 @@ changes needed anywhere else in the code.
 - Live info panel (FPS, camera/chunk position, zoom, weather/sun/light/sound/fire/digging status, camera rotation, current selection size, tile under cursor).
 - Minimap with click-to-travel, top-right.
 - Object picker panel (`I`, grid on) — top-left, so it doesn't collide with the minimap.
+- A customizable label in the top-right corner (`self.corner_label_text` in `generation_wold.py`) — a version tag, title, or anything else you want always visible; renders on a semi-transparent backing so it stays readable over any terrain.
+- A **dynamic** control-hint panel in the bottom-right corner: it only shows the keys that are actually useful right now — e.g. it shows dig/fill hints while in `dig` mode, `E`/`W`/`S` riding hints while you're locked onto a cart, `E detonate bomb` only while hovering a bomb, and so on, instead of one long static list.
 ---
 
 ## Minimum system requirements
