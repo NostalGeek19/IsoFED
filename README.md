@@ -131,9 +131,8 @@ clear the tree (or wait for fire to burn it down) first.
 
 ### Stacks (placement height)
 
-Objects can be stacked on top of each other on a single tile — like blocks
-in Minecraft. The maximum stack height is set by the `MAX_STACK_HEIGHT`
-constant in `object_system.py` (default **4**). Once a stack is full, left
+Objects can be stacked on top of each other on a single tile. The maximum stack height is set by the `MAX_STACK_HEIGHT`
+constant in `object_system.py` (default **10**). Once a stack is full, left
 click on that tile stops placing new blocks until you remove the top one
 with a right click.
 
@@ -277,7 +276,7 @@ changes needed anywhere else in the code.
   of it — the whole hole (and anything visually layered on it) darkens
   together as a single "empty pit" effect.
 - If a hole ends up next to `shallow_water`, water gradually flows in and
-  fills it — and behaves a little like Dwarf Fortress: a **wide pool** (part
+  fills it — **wide pool** (part
   of a solid 2×2-or-bigger dug block) fills a bit **slower**, while a
   **narrow, one-tile-wide corridor or dead end** fills **much faster**, as if
   under pressure through a single channel. A filled (or half-filled)
