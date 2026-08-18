@@ -140,7 +140,7 @@ class ChunkLoader:
 
 
 class IsometricWorld:
-    def __init__(self, width=512, height=512, chunk_size=16, tile_size=64):
+    def __init__(self, width=512, height=512, chunk_size=16, tile_size=64, seed=None):
         self.width = width
         self.height = height
         self.chunk_size = chunk_size
@@ -150,7 +150,7 @@ class IsometricWorld:
         self.max_layers = 16
         
         # Perlin noise settings for natural generation
-        self.seed = random.randint(0, 10000)
+        self.seed = random.randint(0, 10000) if seed is None else int(seed)
         
         # Multiple layers of noise for different scales.
         self.noise_large = VectorizedPerlin(seed=self.seed)
@@ -2551,9 +2551,34 @@ class DualViewRenderer:
         sys.exit()
     
 
-def main(): 
+def _get_seed_from_args_or_env():
+    seed = None
+
+    for i, arg in enumerate(sys.argv):
+        if arg in ("--seed", "-s") and i + 1 < len(sys.argv):
+            seed = sys.argv[i + 1]
+            break
+        if arg.startswith("--seed="):
+            seed = arg.split("=", 1)[1]
+            break
+
+    if seed is None:
+        seed = os.environ.get("WORLD_SEED")
+
+    if seed is None or str(seed).strip() == "":
+        return None
+
+    try:
+        return int(seed)
+    except ValueError:
+        # Allow non-numeric seeds (e.g. words) by hashing them into an int
+        return abs(hash(str(seed))) % 10_000_000
+
+
+def main():
     # Generation world
-    world = IsometricWorld(width=512, height=512, chunk_size=16, tile_size=64)
+    seed = _get_seed_from_args_or_env()
+    world = IsometricWorld(width=512, height=512, chunk_size=16, tile_size=64, seed=seed)
     renderer = DualViewRenderer(world)
     renderer.run()
 
