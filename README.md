@@ -21,6 +21,10 @@ No external art or audio assets are required to run the project: terrain is colo
 - Asynchronous chunk loading via a background thread pool.
 - One click (`R`) regenerates the entire world with a fresh seed — this also wipes every player-made change with it (placed objects, dug holes, lamps, fire/ash, explosion scorch marks, rails and the cart), so you always start from a truly clean slate rather than a fresh terrain layered under old leftovers.
 
+### Launcher
+![World preview](screenshots/Launcher.png)
+-Using the launcher, you can generate a random seed or enter your own to generate and launch a world.
+
 ### Weather
 ![World preview](screenshots/rain.png)
 - Three precipitation types — **rain**, **snow**, and **sandstorm** — each tied to the biome currently dominating the screen (rain over grass/forest/water, snow over cold/high biomes, sandstorm over desert/savanna).
