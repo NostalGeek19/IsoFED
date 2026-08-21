@@ -23,7 +23,7 @@ No external art or audio assets are required to run the project: terrain is colo
 
 ### Launcher
 ![World preview](screenshots/Launcher.png)
--Using the launcher, you can generate a random seed or enter your own to generate and launch a world.
+- Using the launcher, you can generate a random seed or enter your own to generate and launch a world.
 
 ### Weather
 ![World preview](screenshots/rain.png)
