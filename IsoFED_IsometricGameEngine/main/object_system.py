@@ -398,7 +398,6 @@ class ObjectSystem:
         self._place_sound_missing_logged.clear()
 
     # ------------------------------------------------------------------
-    # Звук постановки объекта
     def _find_place_sound_path(self, obj_type):
         sound_key = OBJECT_TYPES.get(obj_type, {}).get('place_sound', obj_type)
         for directory in OBJECT_SOUND_SEARCH_DIRS:
@@ -504,9 +503,17 @@ class ObjectSystem:
             self._draw_object(screen, obj.obj_type, obj.level, obj.mirrored, screen_x, screen_y,
                                pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn)
 
-    def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None, rotation_fn=None):
+    def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None, rotation_fn=None,
+                        actor_depth_fn=None, actor_draw_fn=None, actor_state=None):
         key = (int(tile_x), int(tile_y))
         stack = self.stacks.get(key)
+
+        if (stack and actor_depth_fn is not None and actor_draw_fn is not None and actor_state is not None
+                and not actor_state.get('drawn') and actor_state.get('depth') is not None):
+            if actor_depth_fn(tile_x, tile_y) > actor_state['depth']:
+                actor_draw_fn()
+                actor_state['drawn'] = True
+
         if not stack:
             return
 
