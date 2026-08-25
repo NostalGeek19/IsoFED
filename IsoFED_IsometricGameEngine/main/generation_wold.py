@@ -24,6 +24,7 @@ from rails_system import (RailsSystem, can_place_rail, can_place_cart,
 from digging_system import DiggingSystem
 from water_flow_system import WaterFlowSystem
 from object_system import ObjectSystem
+from fluid_cube_system import FluidCubeSystem
 from texture_manager import TextureManager
 
 
@@ -608,7 +609,7 @@ class DualViewRenderer:
         self.big_font = pygame.font.Font(None, 48)
 
 
-        self.corner_label_text = "Public-release version v21.08.2026a"
+        self.corner_label_text = "Alpha version v24.08.2026"
         self.corner_label_color = (255, 255, 255)
         
         self.current_layer = 0
@@ -674,6 +675,9 @@ class DualViewRenderer:
         # water_flow_system.py.
         self.digging = DiggingSystem()
         self.water_flow = WaterFlowSystem(self.digging)
+        # water_cube / lava_cube spreading, containment, and evaporation
+        # — separate module, fluid_cube_system.py.
+        self.fluids = FluidCubeSystem(on_tile_changed=self._sync_object_lights_at)
 
         self._placement_modes = ('light', 'object', 'dig')
         self.placement_mode = 'light'   # cycled with [O]
@@ -1874,6 +1878,7 @@ class DualViewRenderer:
 
             self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
             self.water_flow.update(self.clock.get_time() / 1000.0, water_neighbor_fn=self._tile_is_shallow_water)
+            self.fluids.update(self.clock.get_time() / 1000.0, self.objects)
             self._update_tree_regrow_timers(self.clock.get_time() / 1000.0)
             self.explosions.update(self.clock.get_time() / 1000.0)
             self._update_bomb_fuses(self.clock.get_time() / 1000.0)
@@ -2065,7 +2070,8 @@ class DualViewRenderer:
             f"Fire: {self.fire.get_status_text()} [L ignite selected tile]",
             f"Expl.: {self.explosions.get_status_text()} [E detonate bomb under cursor]",
             f"Rail.: {'riding cart' if self.rails.is_locked() else 'not riding'} [E lock/unlock cart, W/S direction]",
-            f"Dig.: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()}",
+            f"Dig.: {self.digging.get_status_text()} | Water: {self.water_flow.get_status_text()} | "
+            f"Fluids: {self.fluids.get_status_text()}",
             f"Tree: {len(self._tree_regrow_timers)} tile(s) waiting",
             f"l: {self.lighting.count()} (grid [G])",
             f"Obj.: {self.objects.get_status_text()} [O placement: {self.placement_mode}]",
@@ -2211,6 +2217,14 @@ class DualViewRenderer:
                     else:
                         print(f"[Rails] can't place cart at {t}: needs an empty rail there first "
                               f"(top object: {self.objects.get_top_object_type(*t)!r})")
+            elif self.objects.get_fluid_kind(selected_type) is not None:
+                fluid_kind = self.objects.get_fluid_kind(selected_type)
+                for t in tiles:
+                    if self._tile_blocks_new_object_placement(*t):
+                        continue
+                    if self.fluids.pour(self.objects, t[0], t[1], fluid_kind):
+                        self._sync_object_lights_at(*t)
+                        self.objects.play_place_sound(selected_type, self.sound)
             elif self.side_build_mode:
                 self._place_object_side_aware(tiles)
             else:
