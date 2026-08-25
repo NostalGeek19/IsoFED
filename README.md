@@ -45,7 +45,7 @@ No external art or audio assets are required to run the project: terrain is colo
 
 ### Liquid spillage
 ![World preview](screenshots/liquid.gif)
-- The water and lava block can now spread.
+- The water and lava block can now spread!
 
 ### Manual lighting (lamps)
 ![World preview](screenshots/light2.png)
