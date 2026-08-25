@@ -43,6 +43,10 @@ No external art or audio assets are required to run the project: terrain is colo
 - Terrain shading is **directional and dynamic** — slopes facing the sun are brighter, slopes facing away are darker, and the effect rotates over the course of the day instead of using a single fixed light angle.
 - Time can be paused (`T`) or nudged forward/backward an hour at a time (`,` / `.`) for testing or cinematic screenshots.
 
+### Liquid spillage
+![World preview](screenshots/liquid.gif)
+- The water and lava block can now spread.
+
 ### Manual lighting (lamps)
 ![World preview](screenshots/light2.png)
 - Toggle the grid (`G`); hovering the grid highlights the tile under the cursor, and clicking places (or removes) a warm lamp on that tile.
