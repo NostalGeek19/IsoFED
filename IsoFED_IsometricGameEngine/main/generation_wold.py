@@ -609,7 +609,7 @@ class DualViewRenderer:
         self.big_font = pygame.font.Font(None, 48)
 
 
-        self.corner_label_text = "Alpha version v24.08.2026"
+        self.corner_label_text = "Public-release version v25.08.2026"
         self.corner_label_color = (255, 255, 255)
         
         self.current_layer = 0
