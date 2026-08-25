@@ -44,6 +44,7 @@ OBJECT_TYPES = {
         'width_scale': 1.0,
         'level_height_scale': 0.5,
         'sound_material': 'liquid',
+        'fluid': 'water',
     },
     'lava_cube': {
         'label': 'Lava Cube',
@@ -51,6 +52,7 @@ OBJECT_TYPES = {
         'width_scale': 1.0,
         'level_height_scale': 0.5,
         'sound_material': 'lava',
+        'fluid': 'lava',
 
         'light': {'color': (255, 110, 40), 'radius': 4.5, 'intensity': 1.2, 'flicker': 0.35},
     },
@@ -153,6 +155,7 @@ class ObjectSystem:
         self.search_dirs = search_dirs or OBJECT_SEARCH_DIRS
         self.max_stack_height = max_stack_height
         self.stacks = {}   # (tile_x, tile_y) -> {level: (obj_type, mirrored)}
+        self.fluid_fill = {}   # (tile_x, tile_y, level) -> fraction 0..1; missing == 1.0 (full/solid)
         self.selected_type = DEFAULT_OBJECT_TYPE
         self.mirror_next = False   
 
@@ -229,12 +232,16 @@ class ObjectSystem:
             return None
         top_level = max(stack.keys())
         removed_type, _removed_mirrored = stack.pop(top_level)
+        self.fluid_fill.pop((key[0], key[1], top_level), None)
         if not stack:
             del self.stacks[key]
         return removed_type
 
     def remove_all_at(self, tile_x, tile_y):
-        return self.stacks.pop((int(tile_x), int(tile_y)), None) is not None
+        key = (int(tile_x), int(tile_y))
+        for fkey in [k for k in self.fluid_fill if k[0] == key[0] and k[1] == key[1]]:
+            del self.fluid_fill[fkey]
+        return self.stacks.pop(key, None) is not None
 
     def has_object_at(self, tile_x, tile_y):
         return bool(self.stacks.get((int(tile_x), int(tile_y))))
@@ -253,6 +260,12 @@ class ObjectSystem:
             return None
         top_level = max(stack.keys())
         return stack[top_level][0]
+
+    def get_object_at_level(self, tile_x, tile_y, level):
+        stack = self.stacks.get((int(tile_x), int(tile_y)))
+        if not stack:
+            return None
+        return stack.get(int(level))
 
     def get_stack_height(self, tile_x, tile_y):
         stack = self.stacks.get((int(tile_x), int(tile_y)))
@@ -273,12 +286,29 @@ class ObjectSystem:
                 result.append(PlacedObject(tile_x, tile_y, obj_type, level, mirrored))
         return result
 
+    # ------------------------------------------------------------------
+    # Fluid fill level (water_cube / lava_cube)
+    def get_fill(self, tile_x, tile_y, level):
+        return self.fluid_fill.get((int(tile_x), int(tile_y), int(level)), 1.0)
+
+    def set_fill(self, tile_x, tile_y, level, fraction):
+        key = (int(tile_x), int(tile_y), int(level))
+        fraction = max(0.0, min(1.0, fraction))
+        if fraction >= 0.999:
+            self.fluid_fill.pop(key, None)
+        else:
+            self.fluid_fill[key] = fraction
+
+    def get_fluid_kind(self, obj_type):
+        """'water', 'lava', or None — from OBJECT_TYPES[obj_type]['fluid']."""
+        return OBJECT_TYPES.get(obj_type, {}).get('fluid')
+
     def count(self):
 
         return sum(len(stack) for stack in self.stacks.values())
 
     # ------------------------------------------------------------------
-    # Texture loading/cache — it works the same way as in texture_manager.py
+
     def _find_file(self, obj_type):
         filename = OBJECT_TYPES.get(obj_type, {}).get('texture', obj_type)
         for directory in self.search_dirs:
@@ -454,7 +484,7 @@ class ObjectSystem:
             sound_system.play_one_shot(sound, volume=volume)
 
     def _draw_object(self, screen, obj_type, level, mirrored, screen_x, screen_y,
-                      pixels_per_tile, half_tile, quarter_tile, light_color=None, rotation_fn=None):
+                      pixels_per_tile, half_tile, quarter_tile, light_color=None, rotation_fn=None, fill=1.0):
         type_info = OBJECT_TYPES.get(obj_type, {})
         width_scale = type_info.get('width_scale', 1.0)
         level_height_scale = type_info.get('level_height_scale', 0.5)
@@ -469,11 +499,38 @@ class ObjectSystem:
         if sprite is not None:
             if light_color is not None:
                 sprite = self._get_tinted(obj_type, width_px, effective_mirrored, sprite, light_color)
+            if type_info.get('fluid') is not None:
+                sprite = self._get_pulsed(sprite, screen_x, screen_y)
+            if fill < 0.999:
+                sprite = self._get_squashed(sprite, fill)
             rect = sprite.get_rect(midbottom=(screen_x, base_y))
             screen.blit(sprite, rect)
         else:
             self._draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile,
                                          light_color, mirrored=effective_mirrored)
+
+    PULSE_SPEED = 2.2       # radians/sec
+    PULSE_AMPLITUDE = 0.07  # +/- brightness fraction
+
+    def _get_pulsed(self, sprite, screen_x, screen_y):
+        t = pygame.time.get_ticks() / 1000.0
+        phase = screen_x * 0.013 + screen_y * 0.017
+        brightness = 1.0 + self.PULSE_AMPLITUDE * math.sin(t * self.PULSE_SPEED + phase)
+        level = max(0, min(255, int(round(255 * brightness))))
+        pulsed = sprite.copy()
+        pulsed.fill((level, level, level, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        return pulsed
+
+    MIN_SQUASH_FRACTION = 0.4   # never squash a fluid sprite thinner than this — keeps a clearly visible chunk
+
+    def _get_squashed(self, sprite, fill):
+        fill = max(self.MIN_SQUASH_FRACTION, min(1.0, fill))
+        w, h = sprite.get_size()
+        new_h = max(1, int(round(h * fill)))
+        if new_h >= h:
+            return sprite
+
+        return pygame.transform.scale(sprite, (w, new_h))
 
     # ------------------------------------------------------------------
     def render(self, screen, world_to_screen_fn, pixels_per_tile, chunk_bounds=None, light_fn=None, rotation_fn=None):
@@ -500,8 +557,9 @@ class ObjectSystem:
                 continue
 
             light_color = light_fn(obj.tile_x, obj.tile_y) if light_fn is not None else None
+            fill = self.fluid_fill.get((obj.tile_x, obj.tile_y, obj.level), 1.0)
             self._draw_object(screen, obj.obj_type, obj.level, obj.mirrored, screen_x, screen_y,
-                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn)
+                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn, fill=fill)
 
     def render_at_tile(self, screen, world_to_screen_fn, pixels_per_tile, tile_x, tile_y, light_fn=None, rotation_fn=None,
                         actor_depth_fn=None, actor_draw_fn=None, actor_state=None):
@@ -530,8 +588,9 @@ class ObjectSystem:
 
         for level in sorted(stack.keys()):
             obj_type, mirrored = stack[level]
+            fill = self.fluid_fill.get((int(tile_x), int(tile_y), level), 1.0)
             self._draw_object(screen, obj_type, level, mirrored, screen_x, screen_y,
-                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn)
+                               pixels_per_tile, half_tile, quarter_tile, light_color, rotation_fn=rotation_fn, fill=fill)
 
     @staticmethod
     def _draw_placeholder_cube(screen, screen_x, base_y, half_tile, quarter_tile, light_color=None, mirrored=False):
