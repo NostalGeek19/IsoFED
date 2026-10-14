@@ -64,6 +64,21 @@ OBJECT_TYPES = {
         'sound_material': 'glass',
         'light': {'color': (255, 215, 140), 'radius': 5.5, 'intensity': 1.3, 'flicker': 0.0},
     },
+    'pumpkin_cube': {
+        'label': 'Pumpkin Cube',
+        'texture': 'pumpkin_cube',
+        'texture_aliases': ('pumkin_cube', 'pumpkin', 'pumkin'),
+        'width_scale': 1.0,
+        'level_height_scale': 0.5,
+        'sound_material': 'pumpkin',
+    },
+    'ice_cube': {
+        'label': 'Ice Cube',
+        'texture': 'ice_cube',
+        'width_scale': 1.0,
+        'level_height_scale': 0.5,
+        'sound_material': 'ice',
+    },
     #'wooden_stairs': {
         #'label': 'Wooden Stairs',
         #'texture': 'wooden_stairs',
@@ -117,6 +132,10 @@ def _make_place_sound_signal(material, seed):
         'wood':   dict(tone_freq=170,  tone_decay=16, noise_win=6,  noise_decay=22, tone_amt=0.55),
         'stone':  dict(tone_freq=90,   tone_decay=10, noise_win=3,  noise_decay=16, tone_amt=0.35),
         'metal':  dict(tone_freq=480,  tone_decay=7,  noise_win=2,  noise_decay=14, tone_amt=0.75),
+        # Hollow, wet "thud" — low, short tone over soft squashy noise.
+        'pumpkin': dict(tone_freq=140, tone_decay=18, noise_win=9, noise_decay=20, tone_amt=0.60),
+        # Bright, brittle "clink" with a short crackly tail.
+        'ice':    dict(tone_freq=900, tone_decay=24, noise_win=2, noise_decay=30, tone_amt=0.55),
         'glass':  dict(tone_freq=1400, tone_decay=20, noise_win=2,  noise_decay=25, tone_amt=0.65),
         'liquid': dict(tone_freq=240,  tone_decay=12, noise_win=10, noise_decay=10, tone_amt=0.20),
         'lava':   dict(tone_freq=130,  tone_decay=6,  noise_win=8,  noise_decay=8,  tone_amt=0.15),
@@ -310,12 +329,14 @@ class ObjectSystem:
     # ------------------------------------------------------------------
 
     def _find_file(self, obj_type):
-        filename = OBJECT_TYPES.get(obj_type, {}).get('texture', obj_type)
-        for directory in self.search_dirs:
-            for ext in SUPPORTED_EXTENSIONS:
-                path = os.path.join(directory, filename + ext)
-                if os.path.isfile(path):
-                    return path
+        info = OBJECT_TYPES.get(obj_type, {})
+        filenames = [info.get('texture', obj_type)] + list(info.get('texture_aliases', ()))
+        for filename in filenames:
+            for directory in self.search_dirs:
+                for ext in SUPPORTED_EXTENSIONS:
+                    path = os.path.join(directory, filename + ext)
+                    if os.path.isfile(path):
+                        return path
         return None
 
     def _load_raw(self, obj_type):
