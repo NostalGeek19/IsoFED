@@ -609,7 +609,7 @@ class DualViewRenderer:
         self.big_font = pygame.font.Font(None, 48)
 
 
-        self.corner_label_text = "Public-release version v25.08.2026"
+        self.corner_label_text = "Public-release version v14.10.2026"
         self.corner_label_color = (255, 255, 255)
         
         self.current_layer = 0
@@ -743,6 +743,28 @@ class DualViewRenderer:
         }
         
         self.tree_density = 0.5
+        # Pumpkins: real pumpkin_cube objects scattered once per chunk in
+        # grassland (breakable like any placed block; a broken one stays gone).
+        self.pumpkin_density = 0.008
+        self._pumpkin_chunks_done = set()
+        # Ice formations: lone ice_cube blocks and 2-3 high columns on
+        # snow / high_peaks (generated together with the pumpkins).
+        self.ice_formation_density = 0.006
+        # Blocks that fire can spread to and eventually burn away.
+        self.FLAMMABLE_OBJECT_TYPES = ('wooden_cube', 'pumpkin_cube')
+        self.OBJECT_BURN_TIME_RANGE = (3.0, 6.0)   # seconds on fire before it's gone
+        self._object_burn_timers = {}              # (x, y) -> seconds left
+        self._lava_ignite_timer = 0.0
+        # water_cube freezes into ice_cube in these biomes; ice_cube
+        # elsewhere melts back into flowing water after ICE_MELT_TIME.
+        self.FREEZING_BIOMES = ('high_peaks', 'high_peak', 'snow')
+        self._freeze_timer = 0.0
+        self.ICE_MELT_TIME = 10.0
+        self._ice_melt_timers = {}                 # (x, y, level) -> seconds left
+        # Alt held (grid mode OFF): highlight tile + show block name only.
+        self._alt_inspect_tile = None
+        self._object_picker_scroll = 0
+        self._object_picker_rect = None
         self.visible_tiles_count = 0
         self.total_tiles = world.width * world.height
         self.fps_history = []
@@ -1144,6 +1166,221 @@ class DualViewRenderer:
         index = min(index, len(variants) - 1)
         return variants[index]
     
+    def _clean_block_label(self, label):
+        """'Water Cube' -> 'Water' — drop a trailing "Cube" word."""
+        stripped = label.strip()
+        if stripped.lower().endswith('cube'):
+            stripped = stripped[:-len('cube')].strip()
+        return stripped or label
+
+    def _get_hover_block_label(self, tile=None):
+        if tile is None:
+            tile = self.selected_tile
+        if tile is None:
+            return None
+        top_type = self.objects.get_top_object_type(tile[0], tile[1])
+        if top_type is None:
+            return None
+        return self._clean_block_label(self.objects.get_label_for(top_type))
+
+    def _update_alt_inspect_tile(self):
+        """Alt-inspect mode: while Alt is held (and grid mode [G] is OFF)
+        the tile under the cursor is highlighted and its block name shown.
+        Nothing else — no placement, picker, selection or other grid
+        behaviour. In grid mode this is disabled (Alt keeps its build role)."""
+        self._alt_inspect_tile = None
+        if self.current_layer != 0 or self.show_grid or not (pygame.key.get_mods() & pygame.KMOD_ALT):
+            return
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        world_px_x, world_px_y = self.screen_to_world(mouse_x, mouse_y)
+        tile_x = int(world_px_x // self.world.tile_size)
+        tile_y = int(world_px_y // self.world.tile_size)
+        if 0 <= tile_x < self.world.width and 0 <= tile_y < self.world.height:
+            self._alt_inspect_tile = (tile_x, tile_y)
+
+    def _draw_hover_label(self, tile=None):
+        label = self._get_hover_block_label(tile)
+        if not label:
+            return
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+        text_surface = self.small_font.render(label, True, (255, 255, 255))
+        bg_rect = text_surface.get_rect()
+        bg_rect.topleft = (mouse_x + 16, mouse_y + 12)
+        bg_rect.inflate_ip(10, 6)
+        bg_surface = pygame.Surface(bg_rect.size, pygame.SRCALPHA)
+        bg_surface.fill((15, 15, 20, 190))
+        self.screen.blit(bg_surface, bg_rect.topleft)
+        self.screen.blit(text_surface, (bg_rect.x + 5, bg_rect.y + 3))
+
+    def _tile_biome_name(self, tile_x, tile_y):
+        size = self.world.chunk_size
+        tile_x, tile_y = int(tile_x), int(tile_y)
+        chunk = self.world.get_chunk(tile_x // size, tile_y // size)
+        if chunk is None:
+            return None
+        return self._biome_id_to_name.get(int(chunk['tile_map'][tile_x % size, tile_y % size]))
+
+    def _spawn_pumpkins_in_chunk(self, chunk_x, chunk_y):
+        """Randomly (but deterministically per seed) scatter pumpkin_cube
+        objects over the grassland tiles of one chunk, and ice formations
+        over its snow / high_peaks tiles. Runs once per chunk."""
+        key = (chunk_x, chunk_y)
+        if key in self._pumpkin_chunks_done:
+            return
+        chunk = self.world.get_chunk(chunk_x, chunk_y)
+        if chunk is None:
+            return   # not generated yet; try again on a later frame
+        self._pumpkin_chunks_done.add(key)
+        grass_id = self.world.tile_types['grassland']
+        ice_ids = {self.world.tile_types[n] for n in ('snow', 'high_peaks') if n in self.world.tile_types}
+        tile_map = chunk['tile_map']
+        size = self.world.chunk_size
+        for lx in range(size):
+            for ly in range(size):
+                tid = int(tile_map[lx, ly])
+                wx, wy = chunk_x * size + lx, chunk_y * size + ly
+                if tid in ice_ids:
+                    if (self._deterministic_fraction(wx, wy, salt=21) < self.ice_formation_density
+                            and not self.objects.has_object_at(wx, wy)
+                            and not self.digging.is_dug(wx, wy)):
+                        r = self._deterministic_fraction(wx, wy, salt=22)
+                        height = 1 if r < 0.5 else (2 if r < 0.82 else 3)
+                        for lvl in range(height):
+                            self.objects.place_object_at(wx, wy, 'ice_cube', mirrored=False, level=lvl)
+                    continue
+                if tid != grass_id:
+                    continue
+                if self._deterministic_fraction(wx, wy, salt=11) >= self.pumpkin_density:
+                    continue
+                if self.objects.has_object_at(wx, wy) or self.digging.is_dug(wx, wy):
+                    continue
+                mirrored = self._deterministic_fraction(wx, wy, salt=12) < 0.5
+                self.objects.place_object_at(wx, wy, 'pumpkin_cube', mirrored=mirrored, level=0)
+
+    def _tile_has_flammable_object(self, tile_x, tile_y):
+        stack = self.objects.stacks.get((int(tile_x), int(tile_y)))
+        if not stack:
+            return False
+        return any(obj[0] in self.FLAMMABLE_OBJECT_TYPES for obj in stack.values())
+
+    def _tile_has_water_object(self, tile_x, tile_y):
+        stack = self.objects.stacks.get((int(tile_x), int(tile_y)))
+        if not stack:
+            return False
+        return any(self.objects.get_fluid_kind(obj[0]) == 'water' for obj in stack.values())
+
+    def _tile_is_flammable(self, tile_x, tile_y):
+        """What the fire system treats as fuel: forest trees (as before)
+        plus wooden_cube / pumpkin_cube blocks. Water never burns."""
+        if self._tile_has_water_object(tile_x, tile_y):
+            return False
+        return (self._tile_blocks_object_placement(tile_x, tile_y)
+                or self._tile_has_flammable_object(tile_x, tile_y))
+
+    def _update_burning_objects(self, dt):
+        """Flammable blocks standing on a burning tile burn for a few
+        seconds, then disappear (anything non-flammable stacked with them
+        stays and drops down)."""
+        burning = set()
+        for (fx, fy) in self.fire.get_burning_tiles():
+            if self._tile_has_flammable_object(fx, fy):
+                burning.add((int(fx), int(fy)))
+        for key in [k for k in self._object_burn_timers if k not in burning]:
+            del self._object_burn_timers[key]   # fire went out first
+        for key in burning:
+            remaining = self._object_burn_timers.get(key)
+            if remaining is None:
+                remaining = random.uniform(*self.OBJECT_BURN_TIME_RANGE)
+            remaining -= dt
+            if remaining > 0:
+                self._object_burn_timers[key] = remaining
+                continue
+            self._object_burn_timers.pop(key, None)
+            stack = self.objects.stacks.get(key, {})
+            survivors = [stack[lvl] for lvl in sorted(stack)
+                         if stack[lvl][0] not in self.FLAMMABLE_OBJECT_TYPES]
+            self.objects.remove_all_at(key[0], key[1])
+            for obj_type, mirrored in survivors:
+                self.objects.place_object_at(key[0], key[1], obj_type, mirrored=mirrored)
+            self._sync_object_lights_at(key[0], key[1])
+
+    def _update_lava_ignition(self, dt):
+        """Lava that sits on, or spreads next to, a wooden_cube / pumpkin_cube
+        sets it on fire. Checked a few times a second, not every frame."""
+        self._lava_ignite_timer -= dt
+        if self._lava_ignite_timer > 0:
+            return
+        self._lava_ignite_timer = 0.3
+        lava_tiles = [
+            key for key, stack in self.objects.stacks.items()
+            if stack and any(self.objects.get_fluid_kind(o[0]) == 'lava' for o in stack.values())
+        ]
+        for (lx, ly) in lava_tiles:
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    tx, ty = lx + dx, ly + dy
+                    if not self._tile_has_flammable_object(tx, ty):
+                        continue
+                    if self._tile_has_water_object(tx, ty) or self.fire.is_burning_at(tx, ty):
+                        continue
+                    self.fire.ignite(tx, ty)
+
+    def _update_water_extinguish(self):
+        """Water spilled onto a burning tile puts the fire out."""
+        for (fx, fy) in list(self.fire.get_burning_tiles()):
+            if self._tile_has_water_object(fx, fy):
+                self.fire.fires.pop((int(fx), int(fy)), None)
+
+    def _update_freezing(self, dt):
+        """Any water_cube standing on a high_peaks / snow tile turns into
+        ice_cube (whether placed by hand or spread there by the fluid)."""
+        self._freeze_timer -= dt
+        if self._freeze_timer > 0:
+            return
+        self._freeze_timer = 0.2
+        for (kx, ky), stack in list(self.objects.stacks.items()):
+            if not stack:
+                continue
+            if not any(o[0] == 'water_cube' for o in stack.values()):
+                continue
+            if self._tile_biome_name(kx, ky) not in self.FREEZING_BIOMES:
+                continue
+            for level, (obj_type, mirrored) in list(stack.items()):
+                if obj_type == 'water_cube':
+                    stack[level] = ('ice_cube', mirrored)
+                    self.objects.fluid_fill.pop((kx, ky, level), None)
+                    # Forget it as a fluid cell too — ice is solid, it must not spread.
+                    self.fluids.tiles.pop((kx, ky, level), None)
+
+    def _update_ice_melting(self, dt):
+        """ice_cube standing anywhere that isn't a freezing biome turns
+        into a real, flowing water_cube after ICE_MELT_TIME seconds."""
+        live = set()
+        for (kx, ky), stack in list(self.objects.stacks.items()):
+            if not stack:
+                continue
+            for level, (obj_type, mirrored) in list(stack.items()):
+                if obj_type != 'ice_cube':
+                    continue
+                if self._tile_biome_name(kx, ky) in self.FREEZING_BIOMES:
+                    continue
+                cell = (kx, ky, level)
+                live.add(cell)
+                remaining = self._ice_melt_timers.get(cell, self.ICE_MELT_TIME) - dt
+                if remaining > 0:
+                    self._ice_melt_timers[cell] = remaining
+                    continue
+                stack[level] = ('water_cube', mirrored)
+                self.objects.set_fill(kx, ky, level, 1.0)
+                self.fluids.tiles[cell] = {
+                    'kind': 'water', 'open_timer': 0.0, 'spread_timer': 0.0,
+                    'contained': False, 'evaporate_at': None,
+                }
+                live.discard(cell)
+                self._ice_melt_timers.pop(cell, None)
+        for cell in [c for c in self._ice_melt_timers if c not in live]:
+            del self._ice_melt_timers[cell]
+
     def _tile_has_tree(self, world_x, world_y):
         if self.fire.is_tree_suppressed(world_x, world_y):
             return False
@@ -1266,7 +1503,7 @@ class DualViewRenderer:
             del self._tree_regrow_timers[key]
 
     def _on_lightning_strike(self, tile_x, tile_y):
-        self.fire.try_ignite_from_lightning(tile_x, tile_y, self._tile_blocks_object_placement)
+        self.fire.try_ignite_from_lightning(tile_x, tile_y, self._tile_is_flammable)
 
     def _tile_is_shallow_water(self, tile_x, tile_y):
         size = self.world.chunk_size
@@ -1518,6 +1755,8 @@ class DualViewRenderer:
                 is_selected = self.selected_tile == (world_x, world_y)
             if is_selected:
                 pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
+        elif self._alt_inspect_tile == (world_x, world_y):
+            pygame.draw.polygon(self.screen, (255, 215, 0), points, 3)
     
     def _get_dynamic_hints(self):
         hints = []
@@ -1823,6 +2062,7 @@ class DualViewRenderer:
         else:
             self.screen.fill((0, 0, 0))
         
+        self._update_alt_inspect_tile()
         self.water_phase += 0.15
         self.lava_phase += 0.1
         self._update_object_light_flicker()
@@ -1835,6 +2075,9 @@ class DualViewRenderer:
         size = self.world.chunk_size
         
         visible_tiles = self.get_visible_tiles_isometric()
+        if self.current_layer == 0:
+            for chunk_key in {(t[6], t[7]) for t in visible_tiles}:
+                self._spawn_pumpkins_in_chunk(*chunk_key)
         for depth, x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y in visible_tiles:
             self.render_tile_isometric(x, y, screen_x, screen_y, alpha, tile_chunk_x, tile_chunk_y)
             if self.current_layer == 0:
@@ -1876,9 +2119,14 @@ class DualViewRenderer:
                                                  pixels_per_tile, *tile, blocked=blocked,
                                                  rotation_fn=self._rail_rotation_fn)
 
-            self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_blocks_object_placement)
+            self.fire.update(self.clock.get_time() / 1000.0, tree_at_fn=self._tile_is_flammable)
             self.water_flow.update(self.clock.get_time() / 1000.0, water_neighbor_fn=self._tile_is_shallow_water)
             self.fluids.update(self.clock.get_time() / 1000.0, self.objects)
+            self._update_freezing(self.clock.get_time() / 1000.0)
+            self._update_ice_melting(self.clock.get_time() / 1000.0)
+            self._update_lava_ignition(self.clock.get_time() / 1000.0)
+            self._update_water_extinguish()
+            self._update_burning_objects(self.clock.get_time() / 1000.0)
             self._update_tree_regrow_timers(self.clock.get_time() / 1000.0)
             self.explosions.update(self.clock.get_time() / 1000.0)
             self._update_bomb_fuses(self.clock.get_time() / 1000.0)
@@ -1947,6 +2195,12 @@ class DualViewRenderer:
                 self._rotation_fade = 0.0
                 self._rotation_snapshot = None
 
+        if self.current_layer == 0:
+            if self.show_grid and self.selected_tile is not None:
+                self._draw_hover_label()
+            elif self._alt_inspect_tile is not None:
+                self._draw_hover_label(self._alt_inspect_tile)
+
         if self.show_info:
             self.render_info()
         
@@ -1969,10 +2223,19 @@ class DualViewRenderer:
         slot_size = 56
         row_height = slot_size + 14
         padding = 14
+        header_height = 34
         panel_width = 230
-        panel_height = padding * 2 + 30 + row_height * len(entries)
         panel_x = 20
         panel_y = 20
+
+        content_height = row_height * len(entries)
+        max_panel_height = self.screen_height - panel_y - 20
+        panel_height = min(padding * 2 + header_height + content_height, max_panel_height)
+        visible_content_height = panel_height - padding * 2 - header_height
+
+        max_scroll = max(0, content_height - visible_content_height)
+        self._object_picker_scroll = max(0, min(self._object_picker_scroll, max_scroll))
+        scrollable = max_scroll > 0
 
         panel_key = (panel_width, panel_height)
         if not hasattr(self, '_object_picker_panel') or self._object_picker_panel_key != panel_key:
@@ -1987,32 +2250,58 @@ class DualViewRenderer:
         selected_type = self.objects.get_selected_type()
         self._object_picker_slots = []  # (rect, obj_type)
 
-        y = panel_y + 34
+        content_top = panel_y + padding + header_height
+        content_rect = pygame.Rect(panel_x, content_top, panel_width, visible_content_height)
+        previous_clip = self.screen.get_clip()
+        self.screen.set_clip(content_rect)
+
+        y = content_top - self._object_picker_scroll
         for obj_type in entries:
-            slot_rect = pygame.Rect(panel_x + padding, y, slot_size, slot_size)
-            is_selected = (obj_type == selected_type)
-            border_color = (255, 215, 0) if is_selected else (90, 90, 90)
+            if y + slot_size >= content_top and y <= content_top + visible_content_height:
+                slot_rect = pygame.Rect(panel_x + padding, y, slot_size, slot_size)
+                is_selected = (obj_type == selected_type)
+                border_color = (255, 215, 0) if is_selected else (90, 90, 90)
 
-            pygame.draw.rect(self.screen, (25, 25, 25), slot_rect)
+                pygame.draw.rect(self.screen, (25, 25, 25), slot_rect)
 
-            preview = self.objects.get_preview_texture(obj_type, slot_size - 10)
-            if preview is not None:
-                preview_rect = preview.get_rect(center=slot_rect.center)
-                self.screen.blit(preview, preview_rect)
-            else:
-                placeholder_rect = slot_rect.inflate(-18, -18)
-                pygame.draw.rect(self.screen, (191, 143, 90), placeholder_rect)
-                pygame.draw.rect(self.screen, (140, 100, 62), placeholder_rect, 2)
+                preview = self.objects.get_preview_texture(obj_type, slot_size - 10)
+                if preview is not None:
+                    preview_rect = preview.get_rect(center=slot_rect.center)
+                    self.screen.blit(preview, preview_rect)
+                else:
+                    placeholder_rect = slot_rect.inflate(-18, -18)
+                    pygame.draw.rect(self.screen, (191, 143, 90), placeholder_rect)
+                    pygame.draw.rect(self.screen, (140, 100, 62), placeholder_rect, 2)
 
-            pygame.draw.rect(self.screen, border_color, slot_rect, 3 if is_selected else 1)
+                pygame.draw.rect(self.screen, border_color, slot_rect, 3 if is_selected else 1)
 
-            label_text = self.objects.get_label_for(obj_type)
-            label_color = (255, 230, 150) if is_selected else (200, 200, 200)
-            label = self.font.render(label_text, True, label_color)
-            self.screen.blit(label, (slot_rect.right + 12, slot_rect.centery - label.get_height() // 2))
+                label_text = self.objects.get_label_for(obj_type)
+                label_color = (255, 230, 150) if is_selected else (200, 200, 200)
+                label = self.font.render(label_text, True, label_color)
+                self.screen.blit(label, (slot_rect.right + 12, slot_rect.centery - label.get_height() // 2))
 
-            self._object_picker_slots.append((slot_rect, obj_type))
+                self._object_picker_slots.append((slot_rect, obj_type))
             y += row_height
+
+        self.screen.set_clip(previous_clip)
+
+        if scrollable:
+            track_x = panel_x + panel_width - 8
+            track_rect = pygame.Rect(track_x, content_top, 4, visible_content_height)
+            pygame.draw.rect(self.screen, (60, 60, 60), track_rect)
+            thumb_height = max(20, int(visible_content_height * visible_content_height / content_height))
+            thumb_y = content_top + int((visible_content_height - thumb_height) *
+                                         (self._object_picker_scroll / max_scroll))
+            thumb_rect = pygame.Rect(track_x, thumb_y, 4, thumb_height)
+            pygame.draw.rect(self.screen, (190, 190, 190), thumb_rect)
+
+        self._object_picker_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+
+    def scroll_object_picker(self, amount_lines):
+        """amount_lines > 0 scrolls down, < 0 scrolls up — one 'line' is
+        one row of the list, matching a normal mouse wheel notch."""
+        row_height = 56 + 14
+        self._object_picker_scroll += amount_lines * row_height
 
     def handle_object_picker_click(self, mouse_x, mouse_y):
         if not (self.show_grid and self.show_object_picker):
@@ -2329,6 +2618,9 @@ class DualViewRenderer:
         self.explosions.remove_all()
         self.rails.cart = None
         self._tree_regrow_timers.clear()
+        self._object_burn_timers.clear()
+        self._ice_melt_timers.clear()
+        self._pumpkin_chunks_done.clear()
         self._bomb_fuse_timers.clear()
 
         self.world_camera_x = self.world.width * self.world.tile_size // 2
@@ -2461,6 +2753,11 @@ class DualViewRenderer:
                     elif event.key == pygame.K_0:
                         self.storm.set_storm_chance(self.storm.get_storm_chance() + 0.1)
                         print(f"chance: {self.storm.get_storm_chance():.0%}")
+                elif event.type == pygame.MOUSEWHEEL:
+                    if (self.show_grid and self.show_object_picker
+                            and getattr(self, '_object_picker_rect', None) is not None
+                            and self._object_picker_rect.collidepoint(pygame.mouse.get_pos())):
+                        self.scroll_object_picker(-event.y)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         clicked_picker = self.handle_object_picker_click(*event.pos)
